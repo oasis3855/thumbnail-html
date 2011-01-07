@@ -9,6 +9,7 @@
 #
 # thumbnail-dir.pl
 # version 1.1 (2010/November/23)
+# version 1.2 (2010/December/16)
 #
 # GNU GPL Free Software
 #
@@ -33,11 +34,17 @@ use strict;
 use warnings;
 
 use Switch;
+use POSIX;		# mktime用
 use File::Find::Rule;
 use File::Basename;
 use Image::Magick;
 use Image::ExifTool;
 use Image::Size;
+use pQuery;
+use HTML::Scrubber;
+use HTML::TagParser;
+use Time::Local;
+use File::Copy;
 
 use Data::Dumper;
 
@@ -50,9 +57,12 @@ my $nLongEdge = 150;		# サムネイルの長辺ピクセル数（ImageMagickで
 my $nFindMinDepth = 2;		# File::Find::Ruleでの検索深さ（デフォルトは1段目のみ）
 my $nFindMaxDepth = 2;		# File::Find::Ruleでの検索深さ（デフォルトは1段目のみ）
 
+my $flag_read_html = 0;		# 既存HTMLファイルが検出された（データを読み込む）
 my $flag_overwrite = 0;		# サムネイルを作成するときに、既存ファイルに上書きするフラグ
 my $flag_verbose = 0;		# 詳細表示するフラグ
 my $flag_sort_order = 'file-name';	# ソート順
+my $flag_copy_prev = 1;		#「 空白時、前行値のコピーを行う」スイッチ (0:Off, 1:Comment1, 2:Comment1+2)
+my $flag_conv_time = 1;		#「日時をunix秒に変換する」スイッチ
 
 my @arrImageFiles = ();		# 画像ファイルを格納する配列
 
@@ -60,12 +70,14 @@ my @arrImageFiles = ();		# 画像ファイルを格納する配列
 my @arrFileScanMask = ('*.jpg', '*.jpeg', '*.png', '*.gif');	# 処理対象
 my @arrKnownSuffix = ('.jpg', '.jpeg', '.png', '.gif');	# HTML出力時のファイル名で省略する拡張子
 
-print("サムネイルHTML作成 Perlスクリプト (ver 1.1)\n\n");
+print("\nサムネイルHTML作成 Perlスクリプト (ver 1.2)\nこのプログラムは出力HTMLファイルのディレクトリで実行する必要があります\n\n");
 
 sub_user_input_init();	# 初期データの入力
 if(sub_confirm_init_data() != 1){
 	die("終了（ユーザによるキャンセル）\n");
 }
+
+if($flag_read_html == 1){ sub_parse_html(); }
 
 sub_scan_imagefiles();
 sub_sort_imagefiles();
@@ -73,6 +85,16 @@ sub_sort_imagefiles();
 sub_disp_files();
 
 sub_make_thumbnail();
+
+if($flag_read_html == 1){
+	for(my $i=0; $i<1000; $i++){
+		my $strBackupFile = sprintf("%s\.%03d",$strOutputHTML,$i);
+		if(-e $strBackupFile){ next; }
+		File::Copy::copy($strOutputHTML, $strBackupFile) or next;
+		print("バックアップファイル ".$strBackupFile." を作成しました\n");
+		last;
+	}
+}
 
 sub_create_html();
 
@@ -96,7 +118,7 @@ sub sub_user_input_init {
 	if(substr($_,-1) ne '/'){ $_ .= '/'; }	# ディレクトリは / で終わるように修正
 	unless(-d $_){ die("終了（理由：ディレクトリ ".$_." が存在しません）\n"); }
 	$strBaseDir = $_;
-	print("基準ディレクトリ : " . $strBaseDir . "\n");
+	print("基準ディレクトリ : " . $strBaseDir . "\n\n");
 
 	# 対象ディレクトリを限定する場合の入力
 	print("画像があるディレクトリを限定する場合のディレクトリを入力\n改行のみで全てのディレクトリを対象とします（例：image/）： ");
@@ -104,14 +126,14 @@ sub sub_user_input_init {
 	chomp();
 	if(length($_)<=0){
 		$strImageRelativeDir = undef;
-		print("（基準ディレクトリ以下の）全てのディレクトリの画像ファイル対象とします\n");
+		print("（基準ディレクトリ以下の）全てのディレクトリの画像ファイル対象とします\n\n");
 	}
 	else{
 		if(substr($_,0,1) eq '/' || substr($_,0,2) eq './'){ die("終了（理由：/ や ./ で始まらない相対ディレクトリを入力してください）\n"); }
 		if(substr($_,-1) ne '/'){ $_ .= '/'; }	# ディレクトリは / で終わるように修正
 		unless(-d $strBaseDir.$_){ die("終了（理由：ディレクトリ ".$_." が存在しません）\n"); }
 		$strImageRelativeDir = $_;
-		print("画像ディレクトリの限定（基準ディレクトリからの相対） : " . $strImageRelativeDir . "\n");
+		print("画像ディレクトリの限定（基準ディレクトリからの相対） : " . $strImageRelativeDir . "\n\n");
 	}
 
 	# File::Find::Ruleでの検索深さの入力
@@ -130,7 +152,7 @@ sub sub_user_input_init {
 		if(int($_)<$nFindMinDepth || int($_)>10){ die("終了（入力範囲は $nFindMinDepth 〜 10 です）\n"); }
 		$nFindMaxDepth = int($_);
 	
-		print("画像ディレクトリの検索深さ : $nFindMinDepth 〜 $nFindMaxDepth\n");
+		print("画像ディレクトリの検索深さ : $nFindMinDepth 〜 $nFindMaxDepth\n\n");
 	}
 
 
@@ -145,10 +167,10 @@ sub sub_user_input_init {
 		# サムネイル ディレクトリが存在しない場合は、新規作成する
 		mkdir($strBaseDir.$_);
 		unless(-d $strBaseDir.$_){ die("終了（理由：ディレクトリ ".$strBaseDir.$_." が作成できません）\n"); }
-		print("サムネイル ディレクトリ新規作成（基準ディレクトリからの相対） : " . $_ . "\n");
+		print("サムネイル ディレクトリ新規作成（基準ディレクトリからの相対） : " . $_ . "\n\n");
 	}
 	else{
-		print("既存のサムネイル ディレクトリ（基準ディレクトリからの相対） : " . $_ . "\n");
+		print("既存のサムネイル ディレクトリ（基準ディレクトリからの相対） : " . $_ . "\n\n");
 	}
 	$strThumbRelativeDir = $_;
 
@@ -159,7 +181,7 @@ sub sub_user_input_init {
 	if(length($_)<=0){ $_ = 180; }
 	if(int($_)<10 || int($_)>320){ die("終了（入力範囲は 10 〜 320 です）\n"); }
 	$nLongEdge = int($_);
-	print("サムネイルの長辺（px） : " . $nLongEdge . "\n");
+	print("サムネイルの長辺（px） : " . $nLongEdge . "\n\n");
 
 	# サムネイル作成時の上書き設定
 	print("サムネイル作成時に、ファイルがすでにある場合上書きする (y/N)：");
@@ -167,11 +189,11 @@ sub sub_user_input_init {
 	chomp();
 	if(uc($_) eq 'Y'){
 		$flag_overwrite = 1;
-		print("既存のサムネイルファイルには上書きします\n");
+		print("既存のサムネイルファイルには上書きします\n\n");
 	}
 	elsif(uc($_) eq 'N' || length($_)<=0){
 		$flag_overwrite = 0;
-		print("既存のサムネイルファイルがある場合は、それを使います（上書き無し）\n");
+		print("既存のサムネイルファイルがある場合は、それを使います（上書き無し）\n\n");
 	}
 	else{
 		die("終了（Y/Nの選択肢以外が入力された）\n");
@@ -184,15 +206,31 @@ sub sub_user_input_init {
 	if(length($_)<=0){ die("終了（理由：ファイル名が入力されませんでした）\n"); }
 	if($_ =~ /\//){ die("終了（理由：ファイル名に / が入っています）\n"); }
 	if(-f $_ && -w $_){
-		print("出力HTMLファイル名（上書き） : " . $_ . "\n");
+		print("出力HTMLファイル名（既存HTMLのアップデート） : " . $_ . "\n\n");
+		$flag_read_html = 1;	# 既存ファイルデータがあることを示すフラグ
 	}
 	elsif(-f $_){
 		die("終了（理由：出力HTMLファイル " . $_ . " に書き込めません）\n");
 	}
 	else{
-		print("出力HTMLファイル名（新規作成） : " . $_ . "\n");
+		print("出力HTMLファイル名（新規作成） : " . $_ . "\n\n");
 	}
 	$strOutputHTML = $_;
+
+	# コメント欄が空白の場合、前行のデータで保管するかの選択
+	if($flag_read_html == 1) {
+		printf("既存HTML読み込み時、空白項目は前行の値をコピーしますか？\n1:Comment1（日時の右隣）のみ対象\n2:Comment1 & Comment2（コメント欄2つ全て）対象\nN:コピーしない（空白の場合も元のまま）\n選択してください (1/2/N) [1] : ");
+		$_ = <STDIN>;
+		chomp;
+		if(length($_)<=0){  $flag_copy_prev = 1; }
+		elsif(uc($_) eq '1'){ $flag_copy_prev = 1; }
+		elsif(uc($_) eq '2'){ $flag_copy_prev = 2; }
+		elsif(uc($_) eq 'N'){ $flag_copy_prev = 0; }
+		else { die("選択肢 1/2/N 以外が入力されたため終了します") }
+	}
+	if($flag_copy_prev == 0){ print("空白項目は放置します（コピー機能無し）\n\n"); }
+	if($flag_copy_prev == 1){ print("Comment 1が空白の場合、前行をコピーします\n\n"); }
+	if($flag_copy_prev == 2){ print("Comment 1,2が空白の場合、前行をコピーします\n\n"); }
 
 
 	# ソート順の選択
@@ -208,7 +246,7 @@ sub sub_user_input_init {
 		case 4	{ $flag_sort_order='file-date-reverse'; }
 		else	{ $flag_sort_order='file-name'; }
 	}
-	print("ソート順 : " . $flag_sort_order . "\n");
+	print("ソート順 : " . $flag_sort_order . "\n\n");
 
 
 	# HTML形式の選択
@@ -218,7 +256,7 @@ sub sub_user_input_init {
 	if(length($_)<=0){ $_ = 0; }
 	if(int($_)<0 || int($_)>10 || int($_)==1){ die("終了（入力範囲は 0,1 〜 10 です）\n"); }
 	$nHtmlGrid = int($_);
-	print("HTMLレイアウト グリッドの列数 : " . $nHtmlGrid . "\n");
+	print("HTMLレイアウト グリッドの列数 : " . $nHtmlGrid . "\n\n");
 
 
 }
@@ -268,7 +306,8 @@ sub sub_scan_imagefiles {
 	my @arrScan = undef;	# ファイル一覧を一時的に格納する配列
 	my $tmpDate = undef;	# UNIX秒（ファイル/Exifのタイムスタンプ）
 	my $exifTool = Image::ExifTool->new();
-	$exifTool->Options(DateFormat => "%s", StrictDate=> 1);
+#	$exifTool->Options(DateFormat => "%s", StrictDate=> 1);		# Windows版ActivePerlでは%sはサポート外
+	$exifTool->Options(DateFormat => "%Y,%m,%d,%H,%M,%S", StrictDate=> 1);
 
 	if(defined($strImageRelativeDir)){
 		my $strScanPattern = '';
@@ -287,10 +326,23 @@ sub sub_scan_imagefiles {
 		if(length($_) <= 0){ next; }
 		if($_ =~ /$strThumbRelativeDir/){ next; }
 		$_ =~ s/^.\///g;	# 先頭の ./ を削除
+		my $strTemp = $_;	# いったん退避
+		if(sub_check_match_file($_) == 1){ next; }	# 既存HTMLに存在すればスキップ
+		$_ = $strTemp;	# 退避したものを復元
 		$exifTool->ImageInfo($_);
 		$tmpDate = $exifTool->GetValue('CreateDate');
 		if(!defined($tmpDate)){ $tmpDate = (stat($_))[9]; }	# Exifが無い場合は最終更新日
-		my @arrTemp = ($_, dirname($_), basename($_), $tmpDate, 0, 0);
+		else{
+			my @arrTime_t = split(/,/,$tmpDate);
+			$tmpDate = mktime($arrTime_t[5], $arrTime_t[4], $arrTime_t[3], $arrTime_t[2], $arrTime_t[1]-1, $arrTime_t[0]-1900);
+		}
+		my @arrTemp = ($_,		# [0]: 画像ファイルへのパス（dir + basename）
+				dirname($_),	# [1]: 画像ファイルのdir
+				basename($_),	# [2]: 画像ファイルのbasename
+				$strBaseDir . $strThumbRelativeDir . basename($_),	# サムネイルのパス
+				$tmpDate,	# unix秒
+				'',		# comment 1
+				'');		# comment 2
 		push(@arrImageFiles, \@arrTemp);
 	}
 
@@ -310,10 +362,10 @@ sub sub_sort_imagefiles {
 			@arrImageFiles = sort { @$a[1] cmp @$b[1] || @$b[2] cmp @$a[2] } @arrImageFiles;
 		}
 		case 'file-date'	{
-			@arrImageFiles = sort { @$a[1] cmp @$b[1] || @$a[3] cmp @$b[3] } @arrImageFiles;
+			@arrImageFiles = sort { @$a[1] cmp @$b[1] || @$a[4] cmp @$b[4] } @arrImageFiles;
 		}
 		case 'file-date-reverse'	{
-			@arrImageFiles = sort { @$a[1] cmp @$b[1] || @$b[3] cmp @$a[3] } @arrImageFiles;
+			@arrImageFiles = sort { @$a[1] cmp @$b[1] || @$b[4] cmp @$a[4] } @arrImageFiles;
 		}
 	}
 
@@ -324,7 +376,7 @@ sub sub_disp_files {
 
 	if($flag_verbose == 1){
 		foreach(@arrImageFiles){
-			my @tm = localtime($_->[3]);
+			my @tm = localtime($_->[4]);
 			printf("%s, %s, %s, %04d/%02d/%02d %02d:%02d:%02d\n", $_->[1], $_->[2], $_->[0],
 				$tm[5]+1900, $tm[4]+1, $tm[3], $tm[2], $tm[1], $tm[0]);
 		}
@@ -352,12 +404,10 @@ sub sub_make_thumbnail {
 		my $nCountError = 0;
 		foreach(@arrImageFiles)
 		{
-			$strFilenameInput = $_->[0];
-
-
+			$strFilenameInput = $_->[0];		# 画像ファイルへのパス
 			chomp($strFilenameInput);
 			if(length($strFilenameInput) <= 0){ next; }
-			$strFilenameOutput = $strBaseDir . $strThumbRelativeDir . basename($strFilenameInput);
+			$strFilenameOutput = $_->[3];	# サムネイル画像ファイルへのパス
 
 			if(-e $strFilenameOutput && $flag_overwrite == 0)
 			{
@@ -466,20 +516,23 @@ sub sub_create_html {
 		
 			foreach(@arrImageFiles)
 			{
-				$strFilenameInput = $_->[0];
-				my @tm = localtime($_->[3]);
+				$strFilenameInput = $_->[0];		# 画像へのパス
+				my @tm = localtime($_->[4]);
 				chomp($strFilenameInput);
 				if(length($strFilenameInput) <= 0){ next; }
-				$strFilenameOutput = $strBaseDir . $strThumbRelativeDir . basename($strFilenameInput);
+				$strFilenameOutput = $_->[3];	# サムネイル画像へのパス
+				$strFilenameOutput =~ s/^.\///g;	# 先頭の ./ を削除
 				my @arrSize = imgsize($strFilenameOutput);
 				if(!defined($arrSize[0]) || !defined($arrSize[1])){ @arrSize = (0,0); }
-				printf(FH_OUT "  <tr><td>%s</td><td>%s</td><td><a href=\"%s\"><img src=\"%s\" alt=\"\" width=\"%d\" height=\"%d\" /></a></td><td>%04d/%02d/%02d %02d:%02d:%02d</td><td></td><td></td></tr>\n",
+				printf(FH_OUT "  <tr><td>%s</td><td>%s</td><td><a href=\"%s\"><img src=\"%s\" alt=\"\" width=\"%d\" height=\"%d\" /></a></td><td>%04d/%02d/%02d %02d:%02d:%02d</td><td>%s</td><td>%s</td></tr>\n",
 					dirname($strFilenameInput),
 					basename($strFilenameInput, @arrKnownSuffix),
-					$strFilenameInput,
-					$strFilenameOutput,
+					$strFilenameInput,	# [0]: 画像へのパス
+					$strFilenameOutput,	# [3]: サムネイル画像へのパス
 					$arrSize[0], $arrSize[1],
-					$tm[5]+1900, $tm[4]+1, $tm[3], $tm[2], $tm[1], $tm[0]);
+					$tm[5]+1900, $tm[4]+1, $tm[3], $tm[2], $tm[1], $tm[0],	# [4] : unix秒
+					$_->[5],	# [5]: comment 1
+					$_->[6]);	# [6]: comment 2
 
 			}
 		}
@@ -490,7 +543,8 @@ sub sub_create_html {
 				$strFilenameInput = $_->[0];
 				chomp($strFilenameInput);
 				if(length($strFilenameInput) <= 0){ next; }
-				$strFilenameOutput = $strBaseDir . $strThumbRelativeDir . basename($strFilenameInput);
+				$strFilenameOutput = $_->[3];
+				$strFilenameOutput =~ s/^.\///g;	# 先頭の ./ を削除
 				my @arrSize = imgsize($strFilenameOutput);
 				if(!defined($arrSize[0]) || !defined($arrSize[1])){ @arrSize = (0,0); }
 				if($i == 0){ print(FH_OUT "  <tr>\n"); }
@@ -522,4 +576,177 @@ sub sub_create_html {
 
 }
 
+
+# HTMLファイルを読み込んで、CSVデータに切り分ける
+# 
+# thumb-html2csv/pl の関数を流用
+sub sub_parse_html {
+
+	my @arrCsvRaw = (); # CSV_XSに渡すCSV作成用の配列
+	my @arrCsvPrevLine = ();	# 1行前のデータを保存する（空白桁補完用）
+	my $flag_indata = 0;	# A LINKを検出したら1。この値が1の時、CSVデータ対象
+	my $scrubber = HTML::Scrubber->new();
+	$scrubber->allow(qw[ br ]);	# <br> タグは通過させる
+
+	my $strTemp = undef;
+
+	pQuery($strOutputHTML)->find("tr")->each( sub{
+		@arrCsvRaw = ();
+		$flag_indata = 0;
+		pQuery($_)->find("td")->each( sub{
+			$strTemp = $_->innerHTML();
+			$strTemp =~ s/\x0D\x0A|\x0D|\x0A/<br \/>/g; # 改行の除去
+			$strTemp =~ s/\x09/\x20/g; # タブをスペースに変換
+			$strTemp =~ s/\x20+/\x20/g; # 連続したスペースの統合
+
+			# <td></td>間に通常の"文字列"が存在する場合
+			if(length($scrubber->scrub($strTemp))>0){
+				if($flag_indata == 1){
+					# HTML文字列からタグを取り除く
+					$strTemp = $scrubber->scrub($strTemp);
+
+					# 文字列の調整
+					$strTemp =~ s/　/ /g;	# 全角空白→半角空白
+					$strTemp =~ s/<br><\/br>/<br>/g;		# ActivePerlの場合<br></br>→<br>
+					$strTemp =~ s/[ ]*<br>[ ]*/<br>/g;		# <br>前後の空白文字を削除
+					$strTemp =~ s/<br><br>|<br><br><br>/<br>/g;		# 連続<br>を1個に
+					$strTemp =~ s/<br>$//g;		# 行末の<br>を除去
+					$strTemp =~ s/^<br>//g;		# 行頭の<br>を除去
+					if($strTemp eq ' '){ $strTemp = ''; }		# "空白1文字のみ"は切り捨て
+
+					# 日時文字列をUNIX秒に変換
+					#  (YYYY/MM/DD HH:MM → 16文字、YYYY/MM/DD<br>HH:MM:SS → 22文字）
+					if($flag_conv_time == 1 && length($strTemp)>=16 && length($strTemp)<=22)
+					{
+						my $strDate = $strTemp;
+						$strDate =~ s/<br>/ /g;	# <br>を除去して空白文字に
+						# まず、YYYY/MM/DD HH:MM:SS 形式で解析
+						my($year,$mon,$day, $hour, $min, $sec) =
+							($strDate =~ /(\d{4})\/(\d\d)\/(\d\d) (\d\d):(\d\d):(\d\d)/);
+						if(defined($year)){
+							$strTemp = timelocal($sec,$min,$hour,$day,$mon-1,$year)
+						}
+						else{
+							# 次に、YYYY/MM/DD HH:MM 形式で解析
+							($year,$mon,$day, $hour, $min) =
+								($strDate =~ /(\d{4})\/(\d\d)\/(\d\d) (\d\d):(\d\d)/);
+							if(defined($year)){
+								$strTemp = timelocal(0,$min,$hour,$day,$mon-1,$year)
+							}
+						}
+					}
+#					push(@arrCsvRaw, $scrubber->scrub($strTemp));
+
+					push(@arrCsvRaw, $strTemp);
+				}
+			}
+			else {
+				# A LINK が検出された場合（CSVは2データ扱い（LINK先とIMG SRCの二つ）
+				if(length(GetAttribValue($strTemp, 'a', 'href'))>0){
+					if($flag_indata == 1) {
+						# CSV1行完成。ファイルに出力
+						# テーブル1行に複数のデータがある場合にココで引っかかる
+						# （空白時の前行からのコピーはこのモードでは行わない）
+						if($#arrCsvRaw > 1){ sub_read_from_csv(\@arrCsvRaw); }
+						@arrCsvRaw = ();
+						$flag_indata = 0;
+					}
+					push(@arrCsvRaw, GetAttribValue($strTemp, 'a', 'href'));
+					if(length(GetAttribValue($strTemp, 'img', 'src'))>0){ push(@arrCsvRaw, GetAttribValue($strTemp, 'img', 'src')); }
+					else{ push(@arrCsvRaw, ""); }
+					$flag_indata = 1;	# A LINKを検出したフラグ
+				}
+				# IMG が検出された場合
+				elsif(length(GetAttribValue($strTemp, 'img', 'src'))>0){
+					if($flag_indata == 1) {
+						push(@arrCsvRaw, GetAttribValue($strTemp, 'img', 'src'));
+					}
+				}
+				# それ以外のタグが検出された場合は、空白データ扱い
+				else{
+					if($flag_indata == 1) {
+						push(@arrCsvRaw, "");
+					}
+				}
+			}
+		});
+
+		# 桁データが空白の場合、前行から値をコピーする
+		if($flag_copy_prev >= 1)
+		{
+			for(my $i=0; $i<=$#arrCsvRaw; $i++)
+			{
+				if($arrCsvRaw[$i] eq '' && defined($arrCsvPrevLine[$i]) && length($arrCsvPrevLine[$i])>1)
+				{
+					if($i==3){ $arrCsvRaw[$i] = $arrCsvPrevLine[$i]; }
+					if($i==4 && $flag_copy_prev == 2){ $arrCsvRaw[$i] = $arrCsvPrevLine[$i]; }
+				}
+			}
+			@arrCsvPrevLine = @arrCsvRaw;
+		}
+
+		# CSV1行完成。ファイルに出力
+		if($#arrCsvRaw > 1){ sub_read_from_csv(\@arrCsvRaw); }
+	});
+
+	print("既存HTMLファイルから ".$#arrImageFiles+1." 行のデータをインポートしました\n");
+}
+
+#
+# 引数：$strHTML, $strTagName, $strElementName
+# 引数の例： '<img src="x.jpg">', 'img', 'src'
+# 戻り値：$str（値が見つからないときは長さゼロの文字列）
+# 戻り値の例：'x.jpg'
+sub GetAttribValue
+{
+	my $html = HTML::TagParser->new();
+
+	$html->parse("<html><body>".$_[0]."</body></html>");
+	my $elem = $html->getElementsByTagName($_[1]);
+	my $strValue = $elem->getAttribute($_[2]) if ref $elem;
+
+	return($strValue) if defined $strValue;
+	return("");
+}
+
+
+# CSVファイルからデータを読み込んで、配列に格納する
+# 
+# CSVデータの形式："a href","img src", "unix date", "comment1", "comment2"
+#
+# csv2html-thumb.pl の関数を流用
+sub sub_read_from_csv {
+
+	my $ref_arrFields = shift;	# 引数：CSVデータ配列のリファレンス
+
+	if($#$ref_arrFields < 1){ return; }		# 要素数2以下のときはスキップ
+	my @arrTemp = ($$ref_arrFields[0],		# [0]:画像ファイル名（dir + basename)
+			dirname($$ref_arrFields[0]),	# [1]:画像ファイルのdir
+			basename($$ref_arrFields[0], @arrKnownSuffix),	# [2]:画像ファイルのbasename
+			$$ref_arrFields[1],		# [3]:サムネイルファイル名 (dir + basename)
+			defined($$ref_arrFields[2]) ? $$ref_arrFields[2] : 0,	# [4]:unix時間
+			defined($$ref_arrFields[3]) ? $$ref_arrFields[3] : '',	# [5]:comment1
+			defined($$ref_arrFields[4]) ? $$ref_arrFields[4] : ''	# [6]:comment2
+			);
+	$arrTemp[5] =~ s/<br>/<br \/>/g;		# <br>→<br />
+	$arrTemp[6] =~ s/<br>/<br \/>/g;		# <br>→<br />
+
+	push(@arrImageFiles, \@arrTemp);
+
+	return;
+}
+
+
+# 引数で与えられたファイルが、配列内に存在するか検査
+sub sub_check_match_file {
+
+	my $strNewFile = shift;	# 引数：ファイルパス
+
+	foreach(@arrImageFiles){
+		if($strNewFile eq $_->[0]){ return(1); }
+	}
+
+	return(0);
+
+}
 
