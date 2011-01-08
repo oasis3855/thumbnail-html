@@ -656,11 +656,16 @@ sub sub_parse_html {
 
 	my $strTemp = undef;
 
+	my $enc = sub_get_encode_of_file($strOutputHTML);
+	if($enc eq ''){
+		print("入力ファイルのエンコードが正しく判定できませんでした。OSデフォルトで読み込みます\n");
+	}
+
 	pQuery(sub_conv_to_local_charset($strOutputHTML))->find("tr")->each( sub{
 		@arrCsvRaw = ();
 		$flag_indata = 0;
 		pQuery($_)->find("td")->each( sub{
-			$strTemp = sub_conv_to_flagged_utf8($_->innerHTML());
+			$strTemp = sub_conv_to_flagged_utf8($_->innerHTML(), $enc);
 			$strTemp =~ s/\x0D\x0A|\x0D|\x0A/<br \/>/g; # 改行の除去
 			$strTemp =~ s/\x09/\x20/g; # タブをスペースに変換
 			$strTemp =~ s/\x20+/\x20/g; # 連続したスペースの統合
@@ -817,15 +822,16 @@ sub sub_check_match_file {
 sub sub_conv_to_flagged_utf8{
 
 	my $str = shift;
+	my $enc_force = undef;
+	if(@_ >= 1){ $enc_force = shift; }		# デコーダの強制指定
+	
+	# デコーダが強制的に指定された場合
+	if(defined($enc_force) && $enc_force ne ''){
+		$str = $enc_force->decode($str);
+		return($str);
+	}
 
 	my $enc = Encode::Guess->guess($str);	# 文字列のエンコードの判定
-
-	# デバッグ表示
-#	print Data::Dumper->Dumper(\$enc)."\n";
-#	if(ref($enc) eq 'Encode::XS'){
-#		print("detect : ".$enc->mime_name()."\n");
-#	}
-#	print "is_utf8: ".utf8::is_utf8($str)."\n";
 
 	unless(ref($enc)){
 		# エンコード形式が2個以上帰ってきた場合 （shiftjis or utf8）
@@ -876,5 +882,28 @@ sub sub_conv_to_local_charset{
 	$str = Encode::encode($flag_charcode, $str);
 	
 	return($str);
+}
+
+
+# 引数で与えられたファイルの エンコードオブジェクト Encode::encode を返す
+sub sub_get_encode_of_file{
+	my $fname = shift;		# 解析するファイル名
+
+	$fname = sub_conv_to_local_charset($fname);
+
+	# ファイルを一気に読み込む
+	open(FH, "<$fname");
+	my @arr = <FH>;
+	close(FH);
+
+	my $str = join('', @arr);		# 配列を結合して、一つの文字列に
+	my $enc = Encode::Guess->guess($str);	# 文字列のエンコードの判定
+
+	unless(ref($enc)){
+		# エンコード形式が2個以上帰ってきた場合 （例：shiftjis or utf8）
+		$enc = '';
+	}
+
+	return($enc);
 }
 
