@@ -85,8 +85,17 @@ my $flag_conv_time = 1;		#「日時をunix秒に変換する」スイッチ
 my @arrImageFiles = ();		# 画像ファイルを格納する配列
 
 
-my @arrFileScanMask = ('*.jpg', '*.jpeg', '*.png', '*.gif');	# 処理対象
-my @arrKnownSuffix = ('.jpg', '.jpeg', '.png', '.gif');	# HTML出力時のファイル名で省略する拡張子
+# ファイル検索のパターン
+my @arrFileScanMask;
+if($flag_os eq 'linux'){
+	@arrFileScanMask = ('*.jpg', '*.jpeg', '*.png', '*.gif', '*.JPG', '*.JPEG');}
+if($flag_os eq 'windows'){
+	# Windowsの場合は、ファイル名の大文字と小文字は同一に扱われているようだ
+	@arrFileScanMask = ('*.jpg', '*.jpeg', '*.png', '*.gif');
+}
+
+# HTML出力時のファイル名で省略する拡張子
+my @arrKnownSuffix = ('.jpg', '.jpeg', '.png', '.gif', '.JPG', '.JPEG');
 
 print("\n".basename($0)." - サムネイルHTML作成 Perlスクリプト\n\n");
 
