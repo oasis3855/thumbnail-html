@@ -51,7 +51,7 @@ use HTML::TagParser;
 use Time::Local;
 use File::Copy;
 
-use Data::Dumper;
+# use Data::Dumper;
 
 # IOの文字コードを規定
 if($flag_charcode eq 'utf8'){
@@ -107,8 +107,7 @@ if($flag_read_html == 1){ sub_parse_html(); }
 
 sub_scan_imagefiles();
 sub_sort_imagefiles();
-
-sub_disp_files();
+sub_disp_files();	# 入力確認
 
 sub_make_thumbnail();
 
@@ -123,10 +122,6 @@ if($flag_read_html == 1){
 }
 
 sub_create_html();
-
-#print Data::Dumper->Dumper(\@arrImageFiles)."\n";
-
-
 
 print("正常終了\n");
 
@@ -195,21 +190,13 @@ sub sub_user_input_init {
 
 
 	# サムネイル ディレクトリの入力（無い場合は、新規作成）
-	print("サムネイル相対ディレクトリを入力（例：thumb/）[thumb]： ");
+	print("サムネイル ディレクトリ名（例：thumb/）[thumb]： ");
 	$_ = <STDIN>;
 	chomp();
 	if(length($_)<=0){ $_ = 'thumb'; }
 	if(substr($_,0,1) eq '/' || substr($_,0,2) eq './'){ die("終了（理由：/ や ./ で始まらない相対ディレクトリを入力してください）\n"); }
 	if(substr($_,-1) ne '/'){ $_ .= '/'; }	# ディレクトリは / で終わるように修正
-	unless(-d sub_conv_to_local_charset($strBaseDir.$_)){
-		# サムネイル ディレクトリが存在しない場合は、新規作成する
-		mkdir(sub_conv_to_local_charset($strBaseDir.$_));
-		unless(-d sub_conv_to_local_charset($strBaseDir.$_)){ die("終了（理由：ディレクトリ ".$strBaseDir.$_." が作成できません）\n"); }
-		print("サムネイル ディレクトリ新規作成（基準ディレクトリからの相対） : " . $_ . "\n\n");
-	}
-	else{
-		print("既存のサムネイル ディレクトリ（基準ディレクトリからの相対） : " . $_ . "\n\n");
-	}
+	print("サムネイル ディレクトリ（画像ディレクトリ下） : " . $_ . "\n\n");
 	$strThumbRelativeDir = $_;
 
 	# サムネイル画像のサイズを入力する
@@ -271,7 +258,6 @@ sub sub_user_input_init {
 			die("終了（Y/Nの選択肢以外が入力された）\n");
 		}
 	}
-
 
 	# コメント欄が空白の場合、前行のデータで保管するかの選択
 	if($flag_read_html == 1) {
@@ -381,7 +367,7 @@ sub sub_scan_imagefiles {
 	{
 		if(length($_) <= 0){ next; }
 		$_ = sub_conv_to_flagged_utf8($_);
-		if($_ =~ /$strThumbRelativeDir/){ next; }
+		if($_ =~ /$strThumbRelativeDir$/ || $_ =~ /$strThumbRelativeDir\/$/){ next; }
 		my $strFullPath = $_;
 		my ($basename, $path, $ext) = File::Basename::fileparse($strFullPath, @arrKnownSuffix);
 		$path =~ s/^\.\///g;	# 先頭の ./ を削除
@@ -395,11 +381,6 @@ sub sub_scan_imagefiles {
 
 		if(sub_check_match_file($dirname.'/'.$basename.$ext) == 1){ next; }	# 既存HTMLに存在すればスキップ
 
-
-#		$strFullPath =~ s/^\.\///g;	# 先頭の ./ を削除
-#		my $strTemp = $_;	# いったん退避
-#		if(sub_check_match_file($_) == 1){ next; }	# 既存HTMLに存在すればスキップ
-#		$_ = $strTemp;	# 退避したものを復元
 		$exifTool->ImageInfo(sub_conv_to_local_charset($strFullPath));
 		$tmpDate = $exifTool->GetValue('CreateDate');
 		if(!defined($tmpDate)){ $tmpDate = (stat(sub_conv_to_local_charset($strFullPath)))[9]; }	# Exifが無い場合は最終更新日
@@ -410,7 +391,7 @@ sub sub_scan_imagefiles {
 		my @arrTemp = ($strFullPath,		# [0]: 画像ファイルへのパス（dir + basename）
 				$dirname,	# [1]: 画像ファイルの相対dir ($strBaseDirと末尾の/を除去済み）
 				$basename.$ext,	# [2]: 画像ファイルのbasename
-				$strThumbRelativeDir . $basename.$ext,	# [3]: サムネイルのパス
+				$dirname . '/' . $strThumbRelativeDir . $basename.$ext,	# [3]: サムネイルの相対パス
 				$tmpDate,	# [4]: unix秒
 				'',		# [5]: comment 1
 				'');		# [6]: comment 2
@@ -479,6 +460,10 @@ sub sub_make_thumbnail {
 			chomp($strFilenameInput);
 			if(length($strFilenameInput) <= 0){ next; }
 			$strFilenameOutput = $strBaseDir . $_->[3];	# サムネイル画像ファイルへのフルパス
+
+			unless(-d sub_conv_to_local_charset(dirname($strFilenameOutput))){
+				mkdir(sub_conv_to_local_charset(dirname($strFilenameOutput))) or die("サムネイルディレクトリ".dirname($strFilenameOutput)."が作成できない\nプログラムを終了します\n");
+			}
 
 			if(-e sub_conv_to_local_charset($strFilenameOutput) && $flag_overwrite == 0)
 			{
@@ -705,8 +690,6 @@ sub sub_parse_html {
 							}
 						}
 					}
-#					push(@arrCsvRaw, $scrubber->scrub($strTemp));
-
 					push(@arrCsvRaw, $strTemp);
 				}
 			}
@@ -786,7 +769,6 @@ sub GetAttribValue
 #
 # csv2html-thumb.pl の関数を流用
 sub sub_read_from_csv {
-
 	my $ref_arrFields = shift;	# 引数：CSVデータ配列のリファレンス
 
 	if($#$ref_arrFields < 1){ return; }		# 要素数2以下のときはスキップ
@@ -809,18 +791,15 @@ sub sub_read_from_csv {
 
 # 引数で与えられたファイルが、配列内に存在するか検査
 sub sub_check_match_file {
-
 	my $str = shift;	# 引数：ファイルパス
 	foreach(@arrImageFiles){
 		if($str eq $_->[1].'/'.$_->[2]){ return(1); }
 	}
 	return(0);
-
 }
 
 # 任意の文字コードの文字列を、UTF-8フラグ付きのUTF-8に変換する
 sub sub_conv_to_flagged_utf8{
-
 	my $str = shift;
 	my $enc_force = undef;
 	if(@_ >= 1){ $enc_force = shift; }		# デコーダの強制指定
@@ -853,24 +832,18 @@ sub sub_conv_to_flagged_utf8{
 		}
 	}
 
-	# デバッグ表示
-#	print "debug: ".$str."\n";
-
 	return($str);
-
 }
 
 
 # 任意の文字コードの文字列を、UTF-8フラグ無しのUTF-8に変換する
 sub sub_conv_to_unflagged_utf8{
-
 	my $str = shift;
 
 	# いったん、フラグ付きのUTF-8に変換
 	$str = sub_conv_to_flagged_utf8($str);
 
 	return(Encode::encode('utf8', $str));
-
 }
 
 
