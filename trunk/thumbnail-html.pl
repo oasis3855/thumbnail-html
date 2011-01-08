@@ -70,7 +70,6 @@ my $strBaseDir = './';		# 基準ディレクトリ
 my $strImageRelativeDir = '';		# 画像ディレクトリを1つに限定する場合に利用
 my $strThumbRelativeDir = 'thumb/';	# サムネイル格納ディレクトリ
 my $strOutputHTML = './index.html';	# 出力HTML（基準ディレクトリに出力）
-my $nHtmlGrid = 0;		# HTMLのグリッドカラム数（0は説明文付き1列）
 my $nLongEdge = 150;		# サムネイルの長辺ピクセル数（ImageMagickで縮小時に利用）
 my $nFindMinDepth = 2;		# File::Find::Ruleでの検索深さ（デフォルトは1段目のみ）
 my $nFindMaxDepth = 2;		# File::Find::Ruleでの検索深さ（デフォルトは1段目のみ）
@@ -80,7 +79,7 @@ my $flag_overwrite = 0;		# サムネイルを作成するときに、既存フ�
 my $flag_verbose = 0;		# 詳細表示するフラグ
 my $flag_sort_order = 'file-name';	# ソート順
 my $flag_copy_prev = 1;		#「 空白時、前行値のコピーを行う」スイッチ (0:Off, 1:Comment1, 2:Comment1+2)
-my $flag_conv_time = 1;		#「日時をunix秒に変換する」スイッチ
+my $flag_html_style = 'line-style';	# line-style:1行1画像table, grid-style:画像をグリッド表示
 
 my @arrImageFiles = ();		# 画像ファイルを格納する配列
 
@@ -256,6 +255,24 @@ sub sub_user_input_init {
 	}
 	$strOutputHTML = $strBaseDir . $_;
 
+	# 既存HTMLを読み込むかどうか
+	if($flag_read_html == 1){
+		print("既存HTMLファイルを読み込んで反映しますか (Y/N) [Y]：");
+		$_ = <STDIN>;
+		chomp();
+		if(uc($_) eq 'N'){
+			$flag_read_html  = 0;
+			print("既存のHTMLファイルは読み込みません（バックアップのみ作成）\n\n");
+		}
+		elsif(uc($_) eq 'Y' || length($_)<=0){
+			print("既存のHTMLファイルを読み込みます\n\n");
+		}
+		else{
+			die("終了（Y/Nの選択肢以外が入力された）\n");
+		}
+	}
+
+
 	# コメント欄が空白の場合、前行のデータで保管するかの選択
 	if($flag_read_html == 1) {
 		printf("既存HTML読み込み時、空白項目は前行の値をコピーしますか？\n1:Comment1（日時の右隣）のみ対象\n2:Comment1 & Comment2（コメント欄2つ全て）対象\nN:コピーしない（空白の場合も元のまま）\n選択してください (1/2/N) [1] : ");
@@ -289,13 +306,13 @@ sub sub_user_input_init {
 
 
 	# HTML形式の選択
-	print("HTMLレイアウトの選択\n 0: 1ファイル1行（説明文有り）\n 2 - 10: グリッド（横2枚-10枚。説明文なし）\n (0 or 2 - 10) ? [0] ：");
+	print("HTMLレイアウトの選択\n 1: 1画像 1行のtable（再読込対応版）\n 2: 画像グリッド（再読込不可）\n (1/2) ? [1] ：");
 	$_ = <STDIN>;
 	chomp();
-	if(length($_)<=0){ $_ = 0; }
-	if(int($_)<0 || int($_)>10 || int($_)==1){ die("終了（入力範囲は 0,1 -鰀10 です）\n"); }
-	$nHtmlGrid = int($_);
-	print("HTMLレイアウト グリッドの列数 : " . $nHtmlGrid . "\n\n");
+	if(length($_)<=0 || $_ eq '1'){ $flag_html_style = 'line-style'; }
+	elsif($_ eq '2'){ $flag_html_style = 'grid-style'; }
+	else{ die("終了（入力範囲は 1/2 です）\n"); }
+	print("HTMLレイアウト : " . $flag_html_style . "\n\n");
 
 
 }
@@ -534,7 +551,7 @@ sub sub_create_html {
 			"  <title></title>\n" .
 			"  <style type=\"text/css\">\n<!--\n" .
 			"  table {" .
-			"      border:%dpx solid #aaa;" .
+			"      border:1px solid #aaa;" .
 			"      border-collapse:collapse;" .
 			"      font-size: 10pt;" .
 			"      margin: 10px;" .
@@ -542,11 +559,11 @@ sub sub_create_html {
 			"  th {" .
 			"      font-weight: normal;" .
 			"      background:#f8ede2;" .
-			"      border:%dpx solid #aaa;" .
+			"      border:1px solid #aaa;" .
 			"      padding: 0.2em 0.4em;" .
 			"  }" .
 			"  td {" .
-			"      border:%dpx solid #aaa;" .
+			"      border:1px solid #aaa;" .
 			"      padding: 0.2em 0.4em;" .
 			"  }" .
 			"  a img {" .
@@ -554,30 +571,37 @@ sub sub_create_html {
 			"      margin: 0;" .
 			"      padding: 0;" .
 			"  }" .
+			"  div.gallerybox {".
+			"      display: block;".
+			"      position: relative;".
+			"      float: left;".
+			"      margin: 5px;".
+			"      min-width: 50px;".
+			"      min-height: 50px;".
+			"      font-size: 10pt;".
+			"  }".
 			"-->\n  </style>\n" .
 			"</head>\n" .
 			"<body>\n" .
-			"<p>%d files</p>\n" .
-			"<table>\n",
-			$nHtmlGrid == 0 ? 1 : 0,
-			$nHtmlGrid == 0 ? 1 : 0,
-			$nHtmlGrid == 0 ? 1 : 0,
+			"<p>%d files</p>\n",
 			$#arrImageFiles + 1);
 
-		if($nHtmlGrid == 0) {
+		if($flag_html_style eq 'line-style') {
 			# 1行1画像形式のとき
-			printf(FH_OUT "  <tr><th>dir</th><th>file</th><th>thumbnail</th><th>time</th><th>comment 1</th><th>comment 2</th></tr>\n");
+			printf(FH_OUT "<table>\n  <tr><th>dir</th><th>file</th><th>thumbnail</th><th>time</th><th>comment 1</th><th>comment 2</th></tr>\n");
+		}
 		
-			foreach(@arrImageFiles)
-			{
-				my $strFilenameInput = $_->[1] . '/' . $_->[2];		# 画像への相対パス
-				my @tm = localtime($_->[4]);
-				chomp($strFilenameInput);
-				if(length($strFilenameInput) <= 0){ next; }
-				my $strFilenameOutput = $_->[3];	# サムネイル画像への相対パス
-#				$strFilenameOutput =~ s/^.\///g;	# 先頭の ./ を削除
-				my @arrSize = imgsize(sub_conv_to_local_charset($strBaseDir . $strFilenameOutput));
-				if(!defined($arrSize[0]) || !defined($arrSize[1])){ @arrSize = (0,0); }
+		foreach(@arrImageFiles)
+		{
+			my $strFilenameInput = $_->[1] . '/' . $_->[2];		# 画像への相対パス
+			my @tm = localtime($_->[4]);
+			chomp($strFilenameInput);
+			if(length($strFilenameInput) <= 0){ next; }
+			my $strFilenameOutput = $_->[3];	# サムネイル画像への相対パス
+#				$strFilenameOutput =~ s/^\.\///g;	# 先頭の ./ を削除
+			my @arrSize = imgsize(sub_conv_to_local_charset($strBaseDir . $strFilenameOutput));
+			if(!defined($arrSize[0]) || !defined($arrSize[1])){ @arrSize = (0,0); }
+			if($flag_html_style eq 'line-style') {
 				printf(FH_OUT "  <tr><td>%s</td><td>%s</td><td><a href=\"%s\"><img src=\"%s\" alt=\"\" width=\"%d\" height=\"%d\" /></a></td><td>%04d/%02d/%02d %02d:%02d:%02d</td><td>%s</td><td>%s</td></tr>\n",
 					dirname($strFilenameInput),
 					basename($strFilenameInput, @arrKnownSuffix),
@@ -587,36 +611,23 @@ sub sub_create_html {
 					$tm[5]+1900, $tm[4]+1, $tm[3], $tm[2], $tm[1], $tm[0],	# [4] : unix秒
 					$_->[5],	# [5]: comment 1
 					$_->[6]);	# [6]: comment 2
-
 			}
-		}
-		else {
-			# グリッド形式のとき
-			my $i = 0;		# グリッドのカラム カウンター
-			foreach(@arrImageFiles)
-			{
-				my $strFilenameInput = $_->[0];
-				chomp($strFilenameInput);
-				if(length($strFilenameInput) <= 0){ next; }
-				my $strFilenameOutput = $_->[3];
-				$strFilenameOutput =~ s/^.\///g;	# 先頭の ./ を削除
-				my @arrSize = imgsize(sub_conv_to_local_charset($strBaseDir . $strFilenameOutput));
-				if(!defined($arrSize[0]) || !defined($arrSize[1])){ @arrSize = (0,0); }
-				if($i == 0){ print(FH_OUT "  <tr>\n"); }
-				printf(FH_OUT "    <td><a href=\"%s\"><img src=\"%s\" alt=\"\" width=\"%d\" height=\"%d\" /></a></td>\n",
+			elsif($flag_html_style eq 'grid-style') {
+				printf(FH_OUT "<div class=\"gallerybox\" style=\"width:%dpx; height:%dpx;\"><div class=\"g-photo\"><a href=\"%s\"><img src=\"%s\" alt=\"\" width=\"%d\" height=\"%d\" /></a></div><div class=\"g-date\">%04d/%02d/%02d %02d:%02d:%02d</div><div class=\"g-comment1\">%s</div><div class=\"g-comment2\">%s</div></div>\n",
+					$arrSize[0] > $arrSize[1] ? $arrSize[0]+10 : $arrSize[1]+10,
+					$arrSize[0] > $arrSize[1] ? $arrSize[0]+40 : $arrSize[1]+40,
 					$strFilenameInput,
 					$strFilenameOutput,
-					$arrSize[0], $arrSize[1]);
-				$i++;
-				if($i >= $nHtmlGrid){
-					print(FH_OUT "  </tr>\n");
-					$i = 0;
-				}
+					$arrSize[0], $arrSize[1],
+					$tm[5]+1900, $tm[4]+1, $tm[3], $tm[2], $tm[1], $tm[0],	# [4] : unix秒
+					$_->[5],	# [5]: comment 1
+					$_->[6]);	# [6]: comment 2
 			}
-			if($i != 0){ print(FH_OUT "  </tr>\n"); }
+
 		}
+		if($flag_html_style eq 'line-style') { print(FH_OUT "</table>\n"); }
 		
-		print(FH_OUT "</table>\n</body>\n</html>\n");
+		print(FH_OUT "</body>\n</html>\n");
 
 		close(FH_OUT);
 
@@ -671,8 +682,7 @@ sub sub_parse_html {
 
 					# 日時文字列をUNIX秒に変換
 					#  (YYYY/MM/DD HH:MM → 16文字、YYYY/MM/DD<br>HH:MM:SS → 22文字）
-					if($flag_conv_time == 1 && length($strTemp)>=16 && length($strTemp)<=22)
-					{
+					if(length($strTemp)>=16 && length($strTemp)<=22){
 						my $strDate = $strTemp;
 						$strDate =~ s/<br>/ /g;	# <br>を除去して空白文字に
 						# まず、YYYY/MM/DD HH:MM:SS 形式で解析
