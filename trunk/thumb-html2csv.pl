@@ -10,6 +10,7 @@
 #
 # thumb-html2csv.pl
 # version 0.1 (2010/December/14)
+# version 0.11 (2010/December/16)
 #
 # GNU GPL Free Software
 #
@@ -42,7 +43,7 @@ use File::Basename;
 
 my $strHTMLFilename = '';	# 入力ファイル（HTML）
 my $strCsvFilename = '';	# 出力ファイル（CSV）
-my $flag_copy_prev = 1;		#「 空白時、前行値のコピーを行う」スイッチ
+my $flag_copy_prev = 1;		#「 空白時、前行値のコピーを行う」スイッチ (0:Off, 1:Comment1, 2:Comment1+2)
 my $flag_conv_time = 1;		#「日時をunix秒に変換する」スイッチ
 
 
@@ -91,19 +92,22 @@ sub sub_user_input_init {
 	print("出力CSVファイル名 : " . $strCsvFilename . "\n");
 
 
-	printf("空白項目は、前行の値をコピーしますか (Y/N) [Y] : ");
+	printf("空白項目は、前行の値をコピーしますか？\n1:Comment1（日時の右隣）のみ対象\n2:Comment1 & Comment2（コメント欄2つ全て）対象\nN:コピーしない（空白の場合も元のまま）\n選択してください (1/2/N) [1] : ");
 	$_ = <STDIN>;
 	chomp;
 	if(length($_)<=0){  $flag_copy_prev = 1; }
-	elsif(uc($_) eq 'Y'){ $flag_copy_prev = 1; }
-	else {$flag_copy_prev = 0; }
+	elsif(uc($_) eq '1'){ $flag_copy_prev = 1; }
+	elsif(uc($_) eq '2'){ $flag_copy_prev = 2; }
+	elsif(uc($_) eq 'N'){ $flag_copy_prev = 0; }
+	else { die("選択肢 1/2/N 以外が入力されたため終了します") }
 
-	printf("日時（YYYY/MM/DD<br />HH:MM）をunix秒に変換する (Y/N) [Y] : ");
+	printf("日時（YYYY/MM/DD HH:MM or YYYY/MM/DD HH:MM:SS）をunix秒に変換する (Y/N) [Y] : ");
 	$_ = <STDIN>;
 	chomp;
 	if(length($_)<=0){  $flag_conv_time = 1; }
 	elsif(uc($_) eq 'Y'){ $flag_conv_time = 1; }
-	else {$flag_conv_time = 0; }
+	elsif(uc($_) eq 'N'){ $flag_conv_time = 0; }
+	else { die("選択肢 Y/N 以外が入力されたため終了します") }
 
 }
 
@@ -147,14 +151,24 @@ sub sub_parse_html {
 					if($strTemp eq ' '){ $strTemp = ''; }		# "空白1文字のみ"は切り捨て
 
 					# 日時文字列をUNIX秒に変換
-					if($flag_conv_time == 1)
+					#  (YYYY/MM/DD HH:MM → 16文字、YYYY/MM/DD<br>HH:MM:SS → 22文字）
+					if($flag_conv_time == 1 && length($strTemp)>=16 && length($strTemp)<=22)
 					{
-						my($strDate) = $strTemp;
-						my($year,$mon,$day, $hour, $min) =
-							($strDate =~ /(\d{4})\/(\d\d)\/(\d\d)<br>(\d\d):(\d\d)/);
+						my $strDate = $strTemp;
+						$strDate =~ s/<br>/ /g;	# <br>を除去して空白文字に
+						# まず、YYYY/MM/DD HH:MM:SS 形式で解析
+						my($year,$mon,$day, $hour, $min, $sec) =
+							($strDate =~ /(\d{4})\/(\d\d)\/(\d\d) (\d\d):(\d\d):(\d\d)/);
 						if(defined($year)){
-	#						printf("%d/%d/%d %d:%d:00\n", $year,$mon,$day, $hour, $min);
-							$strTemp = timelocal(0,$min,$hour,$day,$mon-1,$year)
+							$strTemp = timelocal($sec,$min,$hour,$day,$mon-1,$year)
+						}
+						else{
+							# 次に、YYYY/MM/DD HH:MM 形式で解析
+							($year,$mon,$day, $hour, $min) =
+								($strDate =~ /(\d{4})\/(\d\d)\/(\d\d) (\d\d):(\d\d)/);
+							if(defined($year)){
+								$strTemp = timelocal(0,$min,$hour,$day,$mon-1,$year)
+							}
 						}
 					}
 #					push(@arrCsvRaw, $scrubber->scrub($strTemp));
@@ -166,7 +180,9 @@ sub sub_parse_html {
 				# A LINK が検出された場合（CSVは2データ扱い（LINK先とIMG SRCの二つ）
 				if(length(GetAttribValue($strTemp, 'a', 'href'))>0){
 					if($flag_indata == 1) {
-						# 前のデータをフラッシュ（書き出す）
+						# CSV1行完成。ファイルに出力
+						# テーブル1行に複数のデータがある場合にココで引っかかる
+						# （空白時の前行からのコピーはこのモードでは行わない）
 						$csv->combine(@arrCsvRaw);
 						if($#arrCsvRaw > 1){ print(FH_OUT $csv->string()."\n"); }
 						@arrCsvRaw = ();
@@ -193,18 +209,20 @@ sub sub_parse_html {
 		});
 
 		# 桁データが空白の場合、前行から値をコピーする
-		if($flag_copy_prev == 1)
+		if($flag_copy_prev >= 1)
 		{
-			for(my $i=0; $i<$#arrCsvRaw; $i++)
+			for(my $i=0; $i<=$#arrCsvRaw; $i++)
 			{
 				if($arrCsvRaw[$i] eq '' && defined($arrCsvPrevLine[$i]) && length($arrCsvPrevLine[$i])>1)
 				{
-					$arrCsvRaw[$i] = $arrCsvPrevLine[$i];
+					if($i==3){ $arrCsvRaw[$i] = $arrCsvPrevLine[$i]; }
+					if($i==4 && $flag_copy_prev == 2){ $arrCsvRaw[$i] = $arrCsvPrevLine[$i]; }
 				}
 			}
 			@arrCsvPrevLine = @arrCsvRaw;
 		}
 
+		# CSV1行完成。ファイルに出力
 		$csv->combine(@arrCsvRaw);
 		if($#arrCsvRaw > 1){ print(FH_OUT $csv->string()."\n"); }
 	});
