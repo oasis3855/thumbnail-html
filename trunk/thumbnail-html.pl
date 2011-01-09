@@ -74,7 +74,7 @@ my $nLongEdge = 150;		# サムネイルの長辺ピクセル数（ImageMagickで
 my $nFindMinDepth = 2;		# File::Find::Ruleでの検索深さ（デフォルトは1段目のみ）
 my $nFindMaxDepth = 2;		# File::Find::Ruleでの検索深さ（デフォルトは1段目のみ）
 
-my $flag_read_html = 0;		# 既存HTMLファイルが検出された（データを読み込む）
+my $flag_read_html = 0;		# 0:既存HTMLを読まない, 1:既存HTMLを全て読み込む, 2:コメントのみ読み込む
 my $flag_overwrite = 0;		# サムネイルを作成するときに、既存ファイルに上書きするフラグ
 my $flag_verbose = 0;		# 詳細表示するフラグ
 my $flag_sort_order = 'file-name';	# ソート順
@@ -103,7 +103,7 @@ if(sub_confirm_init_data() != 1){
 	die("終了（ユーザによるキャンセル）\n");
 }
 
-if($flag_read_html == 1){ sub_parse_html(); }
+if($flag_read_html != 0){ sub_parse_html(); }	# 既存HTMLを全て読み込む
 
 sub_scan_imagefiles();
 sub_sort_imagefiles();
@@ -111,7 +111,7 @@ sub_disp_files();	# 入力確認
 
 sub_make_thumbnail();
 
-if($flag_read_html == 1){
+if($flag_read_html != 0){
 	for(my $i=0; $i<1000; $i++){
 		my $strBackupFile = sprintf("%s\.%03d",$strOutputHTML,$i);
 		if(-e sub_conv_to_local_charset($strBackupFile)){ next; }
@@ -244,35 +244,35 @@ sub sub_user_input_init {
 
 	# 既存HTMLを読み込むかどうか
 	if($flag_read_html == 1){
-		print("既存HTMLファイルを読み込んで反映しますか (Y/N) [Y]：");
+		print("既存HTMLファイルを読み込んで反映しますか\n 0: 読み込まない（新たにつくる）\n 1: 全て読み込む\n 2: コメントのみ一致するJPEGがあれば読み込む\n 選択してください (0-2) [2]：");
 		$_ = <STDIN>;
-		chomp();
-		if(uc($_) eq 'N'){
-			$flag_read_html  = 0;
-			print("既存のHTMLファイルは読み込みません（バックアップのみ作成）\n\n");
-		}
-		elsif(uc($_) eq 'Y' || length($_)<=0){
-			print("既存のHTMLファイルを読み込みます\n\n");
-		}
-		else{
-			die("終了（Y/Nの選択肢以外が入力された）\n");
-		}
+		chomp;
+		if(length($_)<=0){  $flag_read_html = 2; }
+		elsif(uc($_) eq '0'){ $flag_read_html = 0; }
+		elsif(uc($_) eq '1'){ $flag_read_html = 1; }
+		elsif(uc($_) eq '2'){ $flag_read_html = 2; }
+		else { die("選択肢 0-2 以外が入力されたため終了します") }
+
+		if($flag_read_html == 0){ print("既存HTMLの読み込み : OFF\n\n"); }
+		if($flag_read_html == 1){ print("既存HTMLの読み込み : ON（全データ）\n\n"); }
+		if($flag_read_html == 2){ print("既存HTMLの読み込み : ON（コメントのみ）\n\n"); }
 	}
 
 	# コメント欄が空白の場合、前行のデータで保管するかの選択
-	if($flag_read_html == 1) {
-		printf("既存HTML読み込み時、空白項目は前行の値をコピーしますか？\n1:Comment1（日時の右隣）のみ対象\n2:Comment1 & Comment2（コメント欄2つ全て）対象\nN:コピーしない（空白の場合も元のまま）\n選択してください (1/2/N) [1] : ");
+	if($flag_read_html != 0) {
+		printf("既存HTML読み込み時、空白項目は前行の値をコピーしますか？\n1:Comment1（日時の右隣）のみ対象\n2:Comment1 & Comment2（コメント欄2つ全て）対象\nN:コピーしない（空白の場合も元のまま）\n選択してください (1/2/N) [N] : ");
 		$_ = <STDIN>;
 		chomp;
-		if(length($_)<=0){  $flag_copy_prev = 1; }
+		if(length($_)<=0){  $flag_copy_prev = 0; }
 		elsif(uc($_) eq '1'){ $flag_copy_prev = 1; }
 		elsif(uc($_) eq '2'){ $flag_copy_prev = 2; }
 		elsif(uc($_) eq 'N'){ $flag_copy_prev = 0; }
 		else { die("選択肢 1/2/N 以外が入力されたため終了します") }
+
+		if($flag_copy_prev == 0){ print("空白項目は放置します（コピー機能無し）\n\n"); }
+		if($flag_copy_prev == 1){ print("Comment 1が空白の場合、前行をコピーします\n\n"); }
+		if($flag_copy_prev == 2){ print("Comment 1,2が空白の場合、前行をコピーします\n\n"); }
 	}
-	if($flag_copy_prev == 0){ print("空白項目は放置します（コピー機能無し）\n\n"); }
-	if($flag_copy_prev == 1){ print("Comment 1が空白の場合、前行をコピーします\n\n"); }
-	if($flag_copy_prev == 2){ print("Comment 1,2が空白の場合、前行をコピーします\n\n"); }
 
 
 	# ソート順の選択
@@ -347,6 +347,8 @@ sub sub_scan_imagefiles {
 
 	my @arrScan = undef;	# ファイル一覧を一時的に格納する配列
 	my $tmpDate = undef;	# UNIX秒（ファイル/Exifのタイムスタンプ）
+	my $nCountNewfile = 0;		# 新規追加されたファイル数を数える
+	my $nCountUpdatefile = 0;		# 新規追加されたファイル数を数える
 	my $exifTool = Image::ExifTool->new();
 #	$exifTool->Options(DateFormat => "%s", StrictDate=> 1);		# Windows版ActivePerlでは%sはサポート外
 	$exifTool->Options(DateFormat => "%Y,%m,%d,%H,%M,%S", StrictDate=> 1);
@@ -379,8 +381,11 @@ sub sub_scan_imagefiles {
 		my $dirname = $path;
 		$dirname =~ s/\/$//g;		# 末端の / を除去
 
-		if(sub_check_match_file($dirname.'/'.$basename.$ext) == 1){ next; }	# 既存HTMLに存在すればスキップ
+		# 既存ファイル（HTMLまたはCSV）に一致データがある場合、そのインデックス（一致しない場合は -1）
+		my $nMatchLine = -1;
+		if($flag_read_html != 0){ $nMatchLine = sub_check_match_file($dirname.'/'.$basename.$ext); }
 
+		# Exif日時を読み込む
 		$exifTool->ImageInfo(sub_conv_to_local_charset($strFullPath));
 		$tmpDate = $exifTool->GetValue('CreateDate');
 		if(!defined($tmpDate)){ $tmpDate = (stat(sub_conv_to_local_charset($strFullPath)))[9]; }	# Exifが無い場合は最終更新日
@@ -388,15 +393,39 @@ sub sub_scan_imagefiles {
 			my @arrTime_t = split(/,/,$tmpDate);
 			$tmpDate = mktime($arrTime_t[5], $arrTime_t[4], $arrTime_t[3], $arrTime_t[2], $arrTime_t[1]-1, $arrTime_t[0]-1900);
 		}
-		my @arrTemp = ($strFullPath,		# [0]: 画像ファイルへのパス（dir + basename）
-				$dirname,	# [1]: 画像ファイルの相対dir ($strBaseDirと末尾の/を除去済み）
-				$basename.$ext,	# [2]: 画像ファイルのbasename
-				$dirname . '/' . $strThumbRelativeDir . $basename.$ext,	# [3]: サムネイルの相対パス
-				$tmpDate,	# [4]: unix秒
-				'',		# [5]: comment 1
-				'');		# [6]: comment 2
-		push(@arrImageFiles, \@arrTemp);
+
+		# 回転情報を得る（1:0 deg, 3:180 deg, 6:90 deg(CW), 8:270 deg (CW))
+		my $exifRotate = int($exifTool->GetValue('Orientation', 'Raw'));
+		if(!defined($exifRotate) || $exifRotate == 0){ $exifRotate = 1; }
+
+		if($nMatchLine >= 0 && $flag_read_html == 1){
+			# 全てのデータを移行する場合
+			$arrImageFiles[$nMatchLine][7] = $exifRotate;		# [7]: Exif回転情報
+		}
+		elsif($nMatchLine < 0){
+			# 新しいデータを追加する
+			my @arrTemp = ($strFullPath,		# [0]: 画像ファイルへのパス（dir + basename）
+					$dirname,	# [1]: 画像ファイルの相対dir ($strBaseDirと末尾の/を除去済み）
+					$basename.$ext,	# [2]: 画像ファイルのbasename
+					$dirname . '/' . $strThumbRelativeDir . $basename.$ext,	# [3]: サムネイルの相対パス
+					$tmpDate,	# [4]: unix秒
+					'',		# [5]: comment 1
+					'',		# [6]: comment 2
+					$exifRotate);		# [7]: Exif回転情報
+			push(@arrImageFiles, \@arrTemp);
+			$nCountNewfile++;
+		}
+		else{
+			# 既存ファイル内のコメントは流用、サムネイルパスと日時をアップデート
+			$arrImageFiles[$nMatchLine][3] = $dirname . '/' 
+					. $strThumbRelativeDir . $basename.$ext,	# [3]: サムネイルの相対パス
+			$arrImageFiles[$nMatchLine][4] = $tmpDate;	# [4]: unix秒
+			$arrImageFiles[$nMatchLine][7] = $exifRotate;		# [7]: Exif回転情報
+			$nCountUpdatefile++;
+		}
 	}
+	
+	print($nCountNewfile." 個のファイルを新規追加、".$nCountUpdatefile." 個のファイルの情報をアップデートしました\n\n");
 
 }
 
@@ -460,6 +489,7 @@ sub sub_make_thumbnail {
 			chomp($strFilenameInput);
 			if(length($strFilenameInput) <= 0){ next; }
 			$strFilenameOutput = $strBaseDir . $_->[3];	# サムネイル画像ファイルへのフルパス
+			my $exifRotate = $_->[7];		# exif回転情報
 
 			unless(-d sub_conv_to_local_charset(dirname($strFilenameOutput))){
 				mkdir(sub_conv_to_local_charset(dirname($strFilenameOutput))) or die("サムネイルディレクトリ".dirname($strFilenameOutput)."が作成できない\nプログラムを終了します\n");
@@ -490,6 +520,10 @@ sub sub_make_thumbnail {
 #			$image->AdaptiveResize(width=>$nNewWidth, height=>$nNewHeight);
 			$image->Thumbnail(width=>$nNewWidth, height=>$nNewHeight);
 			$image->Sharpen(radius=>0.0, sigma=>1.0);
+			# exif情報による回転
+			if($exifRotate == 3){$image->Rotate(degrees=>180.0); }
+			if($exifRotate == 6){$image->Rotate(degrees=>90.0); }
+			if($exifRotate == 8){$image->Rotate(degrees=>270.0); }
 			$image->Set(quality=>90);
 			$image_check = $image->Write(sub_conv_to_local_charset($strFilenameOutput));
 			if($image_check)
@@ -778,7 +812,8 @@ sub sub_read_from_csv {
 			$$ref_arrFields[1],		# [3]:サムネイルファイル名 (dir + basename)
 			defined($$ref_arrFields[2]) ? $$ref_arrFields[2] : 0,	# [4]:unix時間
 			defined($$ref_arrFields[3]) ? $$ref_arrFields[3] : '',	# [5]:comment1
-			defined($$ref_arrFields[4]) ? $$ref_arrFields[4] : ''	# [6]:comment2
+			defined($$ref_arrFields[4]) ? $$ref_arrFields[4] : '',	# [6]:comment2
+			''		# [7]: Exif回転情報
 			);
 	$arrTemp[5] =~ s/<br>/<br \/>/g;		# <br>→<br />
 	$arrTemp[6] =~ s/<br>/<br \/>/g;		# <br>→<br />
@@ -789,13 +824,15 @@ sub sub_read_from_csv {
 }
 
 
-# 引数で与えられたファイルが、配列内に存在するか検査
+# 引数で与えられたファイルの、arrImageFiles内のインデックスを返す
+# 戻り値：0 - $#arrImageFiles の場合一致した。-1の場合一致するものが無い
 sub sub_check_match_file {
 	my $str = shift;	# 引数：ファイルパス
-	foreach(@arrImageFiles){
-		if($str eq $_->[1].'/'.$_->[2]){ return(1); }
+	my $i;
+	for($i=0; $i<=$#arrImageFiles; $i++){
+		if($str eq $arrImageFiles[$i][1].'/'.$arrImageFiles[$i][2]){ return($i); }
 	}
-	return(0);
+	return(-1);		# 一致せず
 }
 
 # 任意の文字コードの文字列を、UTF-8フラグ付きのUTF-8に変換する
