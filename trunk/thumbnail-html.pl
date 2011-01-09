@@ -10,6 +10,7 @@
 # thumbnail-dir.pl
 # version 1.1 (2010/November/23)
 # version 1.2 (2010/December/16)
+# version 1.3 (2011/January/09)
 #
 # GNU GPL Free Software
 #
