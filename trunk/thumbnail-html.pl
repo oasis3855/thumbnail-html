@@ -49,6 +49,7 @@ use Image::Size;
 use pQuery;
 use HTML::Scrubber;
 use HTML::TagParser;
+use HTML::HeadParser;
 use Time::Local;
 use File::Copy;
 
@@ -285,7 +286,7 @@ sub sub_user_input_init {
 		elsif($_ eq '1'){ $flag_read_encode = 'utf8'; }
 		elsif($_ eq '2'){ $flag_read_encode = 'shiftjis'; }
 		elsif($_ eq '3'){ $flag_read_encode = 'iso-2022-jp'; }
-		elsif($_ eq '4'){ $flag_read_encode = 'euc'; }
+		elsif($_ eq '4'){ $flag_read_encode = 'euc-jp'; }
 		elsif($_ eq '5'){ $flag_read_encode = 'utf16'; }
 		elsif($_ eq '6'){ $flag_read_encode = 'utf32'; }
 		else{ die("0-6 以外が入力されました\n"); }
@@ -926,15 +927,29 @@ sub sub_conv_to_local_charset{
 sub sub_get_encode_of_file{
 	my $fname = shift;		# 解析するファイル名
 
-	$fname = sub_conv_to_local_charset($fname);
-
 	# ファイルを一気に読み込む
-	open(FH, "<$fname");
+	open(FH, "<".sub_conv_to_local_charset($fname));
 	my @arr = <FH>;
 	close(FH);
-
 	my $str = join('', @arr);		# 配列を結合して、一つの文字列に
+
 	my $enc = Encode::Guess->guess($str);	# 文字列のエンコードの判定
+
+	# ファイルがHTMLの場合 Content-Type から判定する
+	if(lc($fname) =~ m/html$/ || lc($fname) =~ m/htm$/){
+		my $parser = HTML::HeadParser->new();
+		unless($parser->parse($str)){
+			my $content_enc = $parser->header('content-type');
+			if(defined($content_enc) && $content_enc ne '' && lc($content_enc) =~ m/text\/html/ ){
+				if(lc($content_enc) =~ m/utf-8/){ $enc = 'utf8'; }
+				elsif(lc($content_enc) =~ m/shift_jis/){ $enc = 'shiftjis'; }
+				elsif(lc($content_enc) =~ m/euc-jp/){ $enc = 'euc-jp'; }
+				
+				print("HTML Content-Type detect : ". $content_enc ."\n");
+			}
+		}
+	}
+
 
 	# エンコード形式の表示（デバッグ用）
 #	if(ref($enc) eq 'Encode::utf8'){ print("detect : utf8\n"); }
