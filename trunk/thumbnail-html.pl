@@ -76,6 +76,7 @@ my $nFindMinDepth = 2;		# File::Find::Ruleでの検索深さ（デフォルト�
 my $nFindMaxDepth = 2;		# File::Find::Ruleでの検索深さ（デフォルトは1段目のみ）
 
 my $flag_read_html = 0;		# 0:既存HTMLを読まない, 1:既存HTMLを全て読み込む, 2:コメントのみ読み込む
+my $flag_read_encode = '';	# 読み込むファイルのエンコード形式を強制指定する場合
 my $flag_overwrite = 0;		# サムネイルを作成するときに、既存ファイルに上書きするフラグ
 my $flag_verbose = 0;		# 詳細表示するフラグ
 my $flag_sort_order = 'file-name';	# ソート順
@@ -275,6 +276,22 @@ sub sub_user_input_init {
 		if($flag_copy_prev == 2){ print("Comment 1,2が空白の場合、前行をコピーします\n\n"); }
 	}
 
+	# 読み込むHTMLファイルのエンコード形式の強制指定
+	if($flag_read_html != 0) {
+		printf("ファイル読み込み時の文字コードの強制指定をしますか\n 0:自動判定（強制指定しない）\n 1:UTF-8\n 2:Shift JIS (cp932)\n 3:iso-2022-jp (JIS)\n 4:EUC-JP\n 5:UTF-16\n 6:UTF-32\n 選択してください (0-6) [0] : ");
+		$_ = <STDIN>;
+		chomp;
+		if(length($_)<=0 || $_ eq '0'){  $flag_read_encode = ''; }
+		elsif($_ eq '1'){ $flag_read_encode = 'utf8'; }
+		elsif($_ eq '2'){ $flag_read_encode = 'shiftjis'; }
+		elsif($_ eq '3'){ $flag_read_encode = 'iso-2022-jp'; }
+		elsif($_ eq '4'){ $flag_read_encode = 'euc'; }
+		elsif($_ eq '5'){ $flag_read_encode = 'utf16'; }
+		elsif($_ eq '6'){ $flag_read_encode = 'utf32'; }
+		else{ die("0-6 以外が入力されました\n"); }
+
+		print("文字コードの強制指定 : ". ($flag_read_encode eq '' ? 'OFF' : $flag_read_encode) . "\n\n");
+	}
 
 	# ソート順の選択
 	print("ソート順を選択\n1: ファイル順（A...Z）\n2: ファイル順（Z...A）\n3: Exif/タイムスタンプ順（過去->未来）\n4: Exif/タイムスタンプ順（未来->過去）\n (1-4) ?  [1]：");
@@ -676,9 +693,12 @@ sub sub_parse_html {
 
 	my $strTemp = undef;
 
-	my $enc = sub_get_encode_of_file($strOutputHTML);
+	my $enc = undef;
+	if($flag_read_encode ne ''){ $enc = $flag_read_encode; }
+	else{ $enc = sub_get_encode_of_file($strOutputHTML); }
 	if($enc eq ''){
-		print("入力ファイルのエンコードが正しく判定できませんでした。OSデフォルトで読み込みます\n");
+		print("入力ファイルのエンコードが正しく判定できませんでした。$flag_charcode で読み込みます\n");
+		$enc = $flag_charcode;
 	}
 
 	pQuery(sub_conv_to_local_charset($strOutputHTML))->find("tr")->each( sub{
@@ -843,9 +863,15 @@ sub sub_conv_to_flagged_utf8{
 	if(@_ >= 1){ $enc_force = shift; }		# デコーダの強制指定
 	
 	# デコーダが強制的に指定された場合
-	if(defined($enc_force) && $enc_force ne ''){
-		$str = $enc_force->decode($str);
-		return($str);
+	if(defined($enc_force)){
+		if(ref($enc_force)){
+			$str = $enc_force->decode($str);
+			return($str);
+		}
+		elsif($enc_force ne '')
+		{
+			$str = Encode::decode($enc_force, $str);
+		}
 	}
 
 	my $enc = Encode::Guess->guess($str);	# 文字列のエンコードの判定
@@ -909,6 +935,22 @@ sub sub_get_encode_of_file{
 
 	my $str = join('', @arr);		# 配列を結合して、一つの文字列に
 	my $enc = Encode::Guess->guess($str);	# 文字列のエンコードの判定
+
+	# エンコード形式の表示（デバッグ用）
+#	if(ref($enc) eq 'Encode::utf8'){ print("detect : utf8\n"); }
+#	elsif(ref($enc) eq 'Encode::Unicode'){
+#		print("detect : ".$$enc{'Name'}."\n");
+#	}
+#	elsif(ref($enc) eq 'Encode::XS'){
+#		print("detect : ".$enc->mime_name()."\n");
+#	}
+#	elsif(ref($enc) eq 'Encode::JP::JIS7'){
+#		print("detect : ".$$enc{'Name'}."\n");
+#	}
+#	else{
+#		# 二つ以上のエンコードが推定される場合は、$encに文字列が返る
+#		print("unknown (".$enc.")\n");
+#	}
 
 	unless(ref($enc)){
 		# エンコード形式が2個以上帰ってきた場合 （例：shiftjis or utf8）
