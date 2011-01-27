@@ -52,6 +52,7 @@ use HTML::TagParser;
 use HTML::HeadParser;
 use Time::Local;
 use File::Copy;
+use Text::CSV_XS;
 
 # use Data::Dumper;
 
@@ -71,11 +72,13 @@ if($flag_charcode eq 'shiftjis'){
 my $strBaseDir = './';		# 基準ディレクトリ
 my $strImageRelativeDir = '';		# 画像ディレクトリを1つに限定する場合に利用
 my $strThumbRelativeDir = 'thumb/';	# サムネイル格納ディレクトリ
-my $strOutputHTML = './index.html';	# 出力HTML（基準ディレクトリに出力）
+my $strOutputHTML = 'index.html';	# 出力HTML（基準ディレクトリに出力）
+my $strOutputCSV = 'index.csv';	# 出力CSV（基準ディレクトリに出力）
 my $nLongEdge = 150;		# サムネイルの長辺ピクセル数（ImageMagickで縮小時に利用）
 my $nFindMinDepth = 2;		# File::Find::Ruleでの検索深さ（デフォルトは1段目のみ）
 my $nFindMaxDepth = 2;		# File::Find::Ruleでの検索深さ（デフォルトは1段目のみ）
 
+my $flag_mode;
 my $flag_read_html = 0;		# 0:既存HTMLを読まない, 1:既存HTMLを全て読み込む, 2:コメントのみ読み込む
 my $flag_read_encode = '';	# 読み込むファイルのエンコード形式を強制指定する場合
 my $flag_overwrite = 0;		# サムネイルを作成するときに、既存ファイルに上書きするフラグ
@@ -83,8 +86,12 @@ my $flag_verbose = 0;		# 詳細表示するフラグ
 my $flag_sort_order = 'file-name';	# ソート順
 my $flag_copy_prev = 1;		#「 空白時、前行値のコピーを行う」スイッチ (0:Off, 1:Comment1, 2:Comment1+2)
 my $flag_html_style = 'line-style';	# line-style:1行1画像table, grid-style:画像をグリッド表示
+my $flag_conv_time = 1;		# csv変換時に「日時をunix秒に変換する」スイッチ
+
+my $flag_use_comment3 = 1;		# comment 3 フィールドを用いる (0:NO, 1:YES)
 
 my @arrImageFiles = ();		# 画像ファイルを格納する配列
+my @arrCsv = ();		# CSV書き出し時の全行バッファ
 
 
 # ファイル検索のパターン
@@ -101,37 +108,59 @@ my @arrKnownSuffix = ('.jpg', '.jpeg', '.png', '.gif', '.JPG', '.JPEG');
 
 print("\n".basename($0)." - サムネイルHTML作成 Perlスクリプト\n\n");
 
-sub_user_input_init();	# 初期データの入力
-if(sub_confirm_init_data() != 1){
-	die("終了（ユーザによるキャンセル）\n");
-}
+sub_user_select_mode();	# モードの選択
 
-if($flag_read_html != 0){ sub_parse_html(); }	# 既存HTMLを全て読み込む
-
-sub_scan_imagefiles();
-sub_sort_imagefiles();
-sub_disp_files();	# 入力確認
-
-sub_make_thumbnail();
-
-if($flag_read_html != 0){
-	for(my $i=0; $i<1000; $i++){
-		my $strBackupFile = sprintf("%s\.%03d",$strOutputHTML,$i);
-		if(-e sub_conv_to_local_charset($strBackupFile)){ next; }
-		File::Copy::copy(sub_conv_to_local_charset($strOutputHTML), sub_conv_to_local_charset($strBackupFile)) or next;
-		print("バックアップファイル ".$strBackupFile." を作成しました\n");
-		last;
+if($flag_mode eq 'thumbhtml'){
+	sub_user_input_init();	# 初期データの入力
+	if(sub_confirm_init_data() != 1){
+		die("終了（ユーザによるキャンセル）\n");
 	}
-}
 
-sub_create_html();
+	if($flag_read_html != 0){ sub_parse_html(); }	# 既存HTMLを全て読み込む
+
+	sub_scan_imagefiles();
+	sub_sort_imagefiles();
+	sub_disp_files();	# 入力確認
+
+	sub_make_thumbnail();
+
+	if($flag_read_html != 0){
+		for(my $i=0; $i<1000; $i++){
+			my $strBackupFile = sprintf("%s\.%03d",$strOutputHTML,$i);
+			if(-e sub_conv_to_local_charset($strBackupFile)){ next; }
+			File::Copy::copy(sub_conv_to_local_charset($strOutputHTML), sub_conv_to_local_charset($strBackupFile)) or next;
+			print("バックアップファイル ".$strBackupFile." を作成しました\n");
+			last;
+		}
+	}
+
+	sub_create_html();
+}
+elsif($flag_mode eq 'html2csv'){
+	sub_user_input_init_html2csv();
+	sub_parse_html();	# 既存HTMLを全て読み込む
+	sub_write_csv();	# CSVファイルに書き込む
+}
 
 print("正常終了\n");
 
 exit();
 
 
-# 初期データの入力
+# 処理モードの選択
+sub sub_user_select_mode {
+	print("処理モードの選択\n 1. サムネイルHTMLを作成\n 2. html を csv に変換（alpha ver）\n 3. csvをhtmlに変換（未実装）\n選択してください (1-3) [1] : ");
+		$_ = <STDIN>;
+		chomp;
+		if(length($_)<=0 || uc($_) eq '1'){ $flag_mode = 'thumbhtml'; }
+		elsif(uc($_) eq '2'){ $flag_mode = 'html2csv'; }
+		elsif(uc($_) eq '3'){ $flag_mode = 'csv2html'; }
+		else { die("選択肢 1-3 以外が入力されたため終了します") }
+
+		print("処理モード : $flag_mode\n\n");
+}
+
+# 初期データの入力（thumbhtmlモード）
 sub sub_user_input_init {
 
 	# プログラムの引数は、対象ディレクトリとする
@@ -361,6 +390,102 @@ sub sub_confirm_init_data {
 }
 
 
+# 初期データの入力（html2csvモード）
+sub sub_user_input_init_html2csv {
+
+	# プログラムの引数は、対象ディレクトリとする
+	if($#ARGV == 0 && length($ARGV[0])>1)
+	{
+		$strBaseDir = sub_conv_to_flagged_utf8($ARGV[0]);
+	}
+
+	# 基準ディレクトリの入力
+	print("基準ディレクトリを、絶対または相対ディレクトリで入力。\n（例：/home/user/, ./）");
+	if(length($strBaseDir)>0){ print("[$strBaseDir] :"); }
+	else{ print(":"); }
+	$_ = <STDIN>;
+	chomp();
+	if(length($_)<=0){
+		if(length($strBaseDir)>0){ $_ = $strBaseDir; }	# スクリプトの引数のデフォルトを使う場合
+		else{ die("終了（理由：ディレクトリが入力されませんでした）\n"); }
+	}
+	if(substr($_,-1) ne '/'){ $_ .= '/'; }	# ディレクトリは / で終わるように修正
+	unless(-d sub_conv_to_local_charset($_)){ die("終了（理由：ディレクトリ ".$_." が存在しません）\n"); }
+	$strBaseDir = $_;
+	print("基準ディレクトリ : " . $strBaseDir . "\n\n");
+
+
+	# 入力HTMLファイル名の入力
+	print("入力HTMLファイル名（例：index.html）： ");
+	$_ = <STDIN>;
+	chomp;
+	if(length($_)<=0){ die("終了（理由：ファイル名が入力されませんでした）\n"); }
+	if($_ =~ /\//){ die("終了（理由：ファイル名に / が入っています）\n"); }
+	if(!(-f sub_conv_to_local_charset($strBaseDir . $_))){
+		die("終了（理由：HTMLファイル " . $_ . " が存在しません）\n");
+	}
+	else{
+		print("入力HTMLファイル名 : " . $_ . "\n\n");
+	}
+	$strOutputHTML = $strBaseDir . $_;
+
+
+	# 出力CSVファイル名の入力
+	print("出力CSVファイル名（例：index.csv）： ");
+	$_ = <STDIN>;
+	chomp();
+	if(length($_)<=0){ die("終了（理由：ファイル名が入力されませんでした）\n"); }
+	if($_ =~ /\//){ die("終了（理由：ファイル名に / が入っています）\n"); }
+	if(-f sub_conv_to_local_charset($strBaseDir . $_) && -w sub_conv_to_local_charset($strBaseDir . $_)){
+		print("出力CSVファイル名（既存CSVに上書き） : " . $_ . "\n\n");
+	}
+	elsif(-f sub_conv_to_local_charset($strBaseDir . $_)){
+		die("終了（理由：出力CSVファイル " . $_ . " に書き込めません）\n");
+	}
+	else{
+		print("出力CSVファイル名（新規作成） : " . $_ . "\n\n");
+	}
+	$strOutputCSV = $strBaseDir . $_;
+
+	printf("日時（YYYY/MM/DD HH:MM or YYYY/MM/DD HH:MM:SS）をunix秒に変換する (Y/N) [Y] : ");
+	$_ = <STDIN>;
+	chomp;
+	if(length($_)<=0 || uc($_) eq 'Y'){  $flag_conv_time = 1; }
+	elsif(uc($_) eq 'N'){ $flag_conv_time = 0; }
+	else { die("選択肢 Y/N 以外が入力されたため終了します") }
+
+	# コメント欄が空白の場合、前行のデータで保管するかの選択
+	printf("既存HTML読み込み時、空白項目は前行の値をコピーしますか？\n1:Comment1（日時の右隣）のみ対象\n2:Comment1 & Comment2（コメント欄2つ全て）対象\nN:コピーしない（空白の場合も元のまま）\n選択してください (1/2/N) [N] : ");
+	$_ = <STDIN>;
+	chomp;
+	if(length($_)<=0){  $flag_copy_prev = 0; }
+	elsif(uc($_) eq '1'){ $flag_copy_prev = 1; }
+	elsif(uc($_) eq '2'){ $flag_copy_prev = 2; }
+	elsif(uc($_) eq 'N'){ $flag_copy_prev = 0; }
+	else { die("選択肢 1/2/N 以外が入力されたため終了します") }
+
+	if($flag_copy_prev == 0){ print("空白項目は放置します（コピー機能無し）\n\n"); }
+	if($flag_copy_prev == 1){ print("Comment 1が空白の場合、前行をコピーします\n\n"); }
+	if($flag_copy_prev == 2){ print("Comment 1,2が空白の場合、前行をコピーします\n\n"); }
+
+
+	printf("\n===============\n".
+		"入力 HTML：%s\n".
+		"出力 CSV：%s\n",
+		$strOutputHTML,
+		$strOutputCSV);
+
+	# Y/N 確認
+	print("この内容で処理しますか (y/N)：");
+	$_ = <STDIN>;
+	chomp();
+	if(uc($_) eq 'Y'){
+		return(1);
+	}
+	die("終了（ユーザによるキャンセル）\n");
+
+}
+
 # 対象画像ファイルを配列に格納する
 sub sub_scan_imagefiles {
 
@@ -430,7 +555,8 @@ sub sub_scan_imagefiles {
 					$tmpDate,	# [4]: unix秒
 					'',		# [5]: comment 1
 					'',		# [6]: comment 2
-					$exifRotate);		# [7]: Exif回転情報
+					$exifRotate,		# [7]: Exif回転情報
+					'');	# [8]: comment 3
 			push(@arrImageFiles, \@arrTemp);
 			$nCountNewfile++;
 		}
@@ -588,36 +714,36 @@ sub sub_create_html {
 			"  <meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n" .
 			"  <title></title>\n" .
 			"  <style type=\"text/css\">\n<!--\n" .
-			"  table {" .
+			"  table {\n" .
 			"      border:1px solid #aaa;" .
 			"      border-collapse:collapse;" .
 			"      font-size: 10pt;" .
-			"      margin: 10px;" .
-			"  }" .
-			"  th {" .
+			"      margin: 10px;\n" .
+			"  }\n" .
+			"  th {\n" .
 			"      font-weight: normal;" .
 			"      background:#f8ede2;" .
 			"      border:1px solid #aaa;" .
-			"      padding: 0.2em 0.4em;" .
-			"  }" .
-			"  td {" .
+			"      padding: 0.2em 0.4em;\n" .
+			"  }\n" .
+			"  td {\n" .
 			"      border:1px solid #aaa;" .
-			"      padding: 0.2em 0.4em;" .
-			"  }" .
-			"  a img {" .
+			"      padding: 0.2em 0.4em;\n" .
+			"  }\n" .
+			"  a img {\n" .
 			"      border: 0;" .
 			"      margin: 0;" .
-			"      padding: 0;" .
-			"  }" .
-			"  div.gallerybox {".
+			"      padding: 0;\n" .
+			"  }\n" .
+			"  div.gallerybox {\n".
 			"      display: block;".
 			"      position: relative;".
 			"      float: left;".
 			"      margin: 5px;".
 			"      min-width: 50px;".
 			"      min-height: 50px;".
-			"      font-size: 10pt;".
-			"  }".
+			"      font-size: 10pt;\n".
+			"  }\n".
 			"-->\n  </style>\n" .
 			"</head>\n" .
 			"<body>\n" .
@@ -626,7 +752,8 @@ sub sub_create_html {
 
 		if($flag_html_style eq 'line-style') {
 			# 1行1画像形式のとき
-			printf(FH_OUT "<table>\n  <tr><th>dir</th><th>file</th><th>thumbnail</th><th>time</th><th>comment 1</th><th>comment 2</th></tr>\n");
+			printf(FH_OUT "<table>\n  <tr><th>dir</th><th>file</th><th>thumbnail</th><th>time</th><th>comment 1</th><th>comment 2</th>" .
+			($flag_use_comment3 == 1 ? "<th>F</th>" : "" ) . "</tr>\n");
 		}
 		
 		foreach(@arrImageFiles)
@@ -640,7 +767,8 @@ sub sub_create_html {
 			my @arrSize = imgsize(sub_conv_to_local_charset($strBaseDir . $strFilenameOutput));
 			if(!defined($arrSize[0]) || !defined($arrSize[1])){ @arrSize = (0,0); }
 			if($flag_html_style eq 'line-style') {
-				printf(FH_OUT "  <tr><td>%s</td><td>%s</td><td><a href=\"%s\"><img src=\"%s\" alt=\"\" width=\"%d\" height=\"%d\" /></a></td><td>%04d/%02d/%02d %02d:%02d:%02d</td><td>%s</td><td>%s</td></tr>\n",
+				printf(FH_OUT "  <tr><td>%s</td><td>%s</td><td><a href=\"%s\"><img src=\"%s\" alt=\"\" width=\"%d\" height=\"%d\" /></a></td><td>%04d/%02d/%02d %02d:%02d:%02d</td><td>%s</td><td>%s</td>" .
+					($flag_use_comment3 == 1 ? "<td>%s</td>" : "%s" ) . "</tr>\n",
 					dirname($strFilenameInput),
 					basename($strFilenameInput, @arrKnownSuffix),
 					$strFilenameInput,	# [0]: 画像へのパス
@@ -648,7 +776,8 @@ sub sub_create_html {
 					$arrSize[0], $arrSize[1],
 					$tm[5]+1900, $tm[4]+1, $tm[3], $tm[2], $tm[1], $tm[0],	# [4] : unix秒
 					$_->[5],	# [5]: comment 1
-					$_->[6]);	# [6]: comment 2
+					$_->[6],	# [6]: comment 2
+					($flag_use_comment3 == 1 ? $_->[8] : ''));	# [8]: comment 3
 			}
 			elsif($flag_html_style eq 'grid-style') {
 				printf(FH_OUT "<div class=\"gallerybox\" style=\"width:%dpx; height:%dpx;\"><div class=\"g-photo\"><a href=\"%s\"><img src=\"%s\" alt=\"\" width=\"%d\" height=\"%d\" /></a></div><div class=\"g-date\">%04d/%02d/%02d %02d:%02d:%02d</div><div class=\"g-comment1\">%s</div><div class=\"g-comment2\">%s</div></div>\n",
@@ -728,7 +857,7 @@ sub sub_parse_html {
 
 					# 日時文字列をUNIX秒に変換
 					#  (YYYY/MM/DD HH:MM → 16文字、YYYY/MM/DD<br>HH:MM:SS → 22文字）
-					if(length($strTemp)>=16 && length($strTemp)<=22){
+					if($flag_conv_time == 1 && length($strTemp)>=16 && length($strTemp)<=22){
 						my $strDate = $strTemp;
 						$strDate =~ s/<br>/ /g;	# <br>を除去して空白文字に
 						# まず、YYYY/MM/DD HH:MM:SS 形式で解析
@@ -798,7 +927,7 @@ sub sub_parse_html {
 		if($#arrCsvRaw > 1){ sub_read_from_csv(\@arrCsvRaw); }
 	});
 
-	print("既存HTMLファイルから ".($#arrImageFiles+1)." 行のデータをインポートしました\n");
+	print("既存HTMLファイルから ".($#arrImageFiles >= 0 ? ($#arrImageFiles+1) : ($#arrCsv+1))." 行のデータをインポートしました\n");
 }
 
 #
@@ -827,24 +956,47 @@ sub GetAttribValue
 sub sub_read_from_csv {
 	my $ref_arrFields = shift;	# 引数：CSVデータ配列のリファレンス
 
-	if($#$ref_arrFields < 1){ return; }		# 要素数2以下のときはスキップ
-	my @arrTemp = ($$ref_arrFields[0],		# [0]:画像ファイル名（dir + basename)
-			dirname($$ref_arrFields[0]),	# [1]:画像ファイルのdir
-			basename($$ref_arrFields[0]),	# [2]:画像ファイルのbasename
-			$$ref_arrFields[1],		# [3]:サムネイルファイル名 (dir + basename)
-			defined($$ref_arrFields[2]) ? $$ref_arrFields[2] : 0,	# [4]:unix時間
-			defined($$ref_arrFields[3]) ? $$ref_arrFields[3] : '',	# [5]:comment1
-			defined($$ref_arrFields[4]) ? $$ref_arrFields[4] : '',	# [6]:comment2
-			''		# [7]: Exif回転情報
-			);
-	$arrTemp[5] =~ s/<br>/<br \/>/g;		# <br>→<br />
-	$arrTemp[6] =~ s/<br>/<br \/>/g;		# <br>→<br />
+	if($flag_mode eq 'html2csv'){
+		my $csv = Text::CSV_XS->new({binary=>1}); # 日本語の場合は binary を ON にする
+		$csv->combine(@$ref_arrFields);
+		push(@arrCsv, $csv->string());
+	}
+	elsif($flag_mode = 'thumbhtml'){
 
-	push(@arrImageFiles, \@arrTemp);
+		if($#$ref_arrFields < 1){ return; }		# 要素数2以下のときはスキップ
+		my @arrTemp = ($$ref_arrFields[0],		# [0]:画像ファイル名（dir + basename)
+				dirname($$ref_arrFields[0]),	# [1]:画像ファイルのdir
+				basename($$ref_arrFields[0]),	# [2]:画像ファイルのbasename
+				$$ref_arrFields[1],		# [3]:サムネイルファイル名 (dir + basename)
+				defined($$ref_arrFields[2]) ? $$ref_arrFields[2] : 0,	# [4]:unix時間
+				defined($$ref_arrFields[3]) ? $$ref_arrFields[3] : '',	# [5]:comment1
+				defined($$ref_arrFields[4]) ? $$ref_arrFields[4] : '',	# [6]:comment2
+				'',		# [7]: Exif回転情報
+				defined($$ref_arrFields[5]) ? $$ref_arrFields[5] : '',	# [8]:comment3
+				);
+		$arrTemp[5] =~ s/<br>/<br \/>/g;		# <br>→<br />
+		$arrTemp[6] =~ s/<br>/<br \/>/g;		# <br>→<br />
+		$arrTemp[8] =~ s/<br>/<br \/>/g;		# <br>→<br />
+
+		push(@arrImageFiles, \@arrTemp);
+	}
 
 	return;
 }
 
+
+# CSVファイルに書きこむ
+sub sub_write_csv {
+	open(FH_OUT, ">$strOutputCSV") or die("CSVファイルに書き込めません\n");
+	binmode(FH_OUT, ":utf8");
+	foreach(@arrCsv){
+		print(FH_OUT $_."\n");
+	}
+	close(FH_OUT);
+}
+
+
+# 
 
 # 引数で与えられたファイルの、arrImageFiles内のインデックスを返す
 # 戻り値：0 - $#arrImageFiles の場合一致した。-1の場合一致するものが無い
@@ -935,6 +1087,28 @@ sub sub_get_encode_of_file{
 
 	my $enc = Encode::Guess->guess($str);	# 文字列のエンコードの判定
 
+	# エンコード形式の表示（デバッグ用）
+	print("Automatick encode ");
+	if(ref($enc) eq 'Encode::utf8'){ print("detect : utf8\n"); }
+	elsif(ref($enc) eq 'Encode::Unicode'){
+		print("detect : ".$$enc{'Name'}."\n");
+	}
+	elsif(ref($enc) eq 'Encode::XS'){
+		print("detect : ".$enc->mime_name()."\n");
+	}
+	elsif(ref($enc) eq 'Encode::JP::JIS7'){
+		print("detect : ".$$enc{'Name'}."\n");
+	}
+	else{
+		# 二つ以上のエンコードが推定される場合は、$encに文字列が返る
+		print("unknown (".$enc.")\n");
+	}
+
+	# エンコード形式が2個以上帰ってきた場合 （例：shiftjis or utf8）でテクと失敗と扱う
+	unless(ref($enc)){
+		$enc = '';
+	}
+
 	# ファイルがHTMLの場合 Content-Type から判定する
 	if(lc($fname) =~ m/html$/ || lc($fname) =~ m/htm$/){
 		my $parser = HTML::HeadParser->new();
@@ -945,31 +1119,10 @@ sub sub_get_encode_of_file{
 				elsif(lc($content_enc) =~ m/shift_jis/){ $enc = 'shiftjis'; }
 				elsif(lc($content_enc) =~ m/euc-jp/){ $enc = 'euc-jp'; }
 				
-				print("HTML Content-Type detect : ". $content_enc ."\n");
+				print("HTML Content-Type detect : ". $content_enc ." (is overrided)\n");
+				$enc = $content_enc;
 			}
 		}
-	}
-
-
-	# エンコード形式の表示（デバッグ用）
-#	if(ref($enc) eq 'Encode::utf8'){ print("detect : utf8\n"); }
-#	elsif(ref($enc) eq 'Encode::Unicode'){
-#		print("detect : ".$$enc{'Name'}."\n");
-#	}
-#	elsif(ref($enc) eq 'Encode::XS'){
-#		print("detect : ".$enc->mime_name()."\n");
-#	}
-#	elsif(ref($enc) eq 'Encode::JP::JIS7'){
-#		print("detect : ".$$enc{'Name'}."\n");
-#	}
-#	else{
-#		# 二つ以上のエンコードが推定される場合は、$encに文字列が返る
-#		print("unknown (".$enc.")\n");
-#	}
-
-	unless(ref($enc)){
-		# エンコード形式が2個以上帰ってきた場合 （例：shiftjis or utf8）
-		$enc = '';
 	}
 
 	return($enc);
