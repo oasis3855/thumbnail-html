@@ -54,7 +54,7 @@ use Time::Local;
 use File::Copy;
 use Text::CSV_XS;
 
-# use Data::Dumper;
+use Data::Dumper;
 
 # IOの文字コードを規定
 if($flag_charcode eq 'utf8'){
@@ -74,6 +74,7 @@ my $strImageRelativeDir = '';		# 画像ディレクトリを1つに限定する�
 my $strThumbRelativeDir = 'thumb/';	# サムネイル格納ディレクトリ
 my $strOutputHTML = 'index.html';	# 出力HTML（基準ディレクトリに出力）
 my $strOutputCSV = 'index.csv';	# 出力CSV（基準ディレクトリに出力）
+my $strInputCSV = './index.csv';	# 出力CSV（基準ディレクトリに出力）
 my $nLongEdge = 150;		# サムネイルの長辺ピクセル数（ImageMagickで縮小時に利用）
 my $nFindMinDepth = 2;		# File::Find::Ruleでの検索深さ（デフォルトは1段目のみ）
 my $nFindMaxDepth = 2;		# File::Find::Ruleでの検索深さ（デフォルトは1段目のみ）
@@ -87,6 +88,7 @@ my $flag_sort_order = 'file-name';	# ソート順
 my $flag_copy_prev = 1;		#「 空白時、前行値のコピーを行う」スイッチ (0:Off, 1:Comment1, 2:Comment1+2)
 my $flag_html_style = 'line-style';	# line-style:1行1画像table, grid-style:画像をグリッド表示
 my $flag_conv_time = 1;		# csv変換時に「日時をunix秒に変換する」スイッチ
+my $flag_nowrite_noexist = 1;	# html作成時に、存在しないファイルは書き出さない（html更新、csvから変換時用）
 
 my $flag_use_comment3 = 1;		# comment 3 フィールドを用いる (0:NO, 1:YES)
 
@@ -124,15 +126,8 @@ if($flag_mode eq 'thumbhtml'){
 
 	sub_make_thumbnail();
 
-	if($flag_read_html != 0){
-		for(my $i=0; $i<1000; $i++){
-			my $strBackupFile = sprintf("%s\.%03d",$strOutputHTML,$i);
-			if(-e sub_conv_to_local_charset($strBackupFile)){ next; }
-			File::Copy::copy(sub_conv_to_local_charset($strOutputHTML), sub_conv_to_local_charset($strBackupFile)) or next;
-			print("バックアップファイル ".$strBackupFile." を作成しました\n");
-			last;
-		}
-	}
+	# 出力ファイルが上書きになる場合、バックアップファイルを作成する
+	if(-e sub_conv_to_local_charset($strOutputHTML)){ sub_make_backupfile($strOutputHTML); }
 
 	sub_create_html();
 }
@@ -141,7 +136,17 @@ elsif($flag_mode eq 'html2csv'){
 	sub_parse_html();	# 既存HTMLを全て読み込む
 	sub_write_csv();	# CSVファイルに書き込む
 }
+elsif($flag_mode eq 'csv2html'){
+	sub_user_input_init_csv2html();
+	sub_read_from_csv();
+#	foreach(@arrImageFiles){
+#		print(Data::Dumper->Dumper(\$_)."\n");
+#	}
+	# 出力ファイルが上書きになる場合、バックアップファイルを作成する
+	if(-e sub_conv_to_local_charset($strOutputHTML)){ sub_make_backupfile($strOutputHTML); }
 
+	sub_create_html();
+}
 print("正常終了\n");
 
 exit();
@@ -486,6 +491,53 @@ sub sub_user_input_init_html2csv {
 
 }
 
+
+# 初期データの入力（csv2htmlモード）
+sub sub_user_input_init_csv2html {
+
+	# プログラムの引数は、対象ディレクトリとする
+	if($#ARGV == 0 && length($ARGV[0])>1)
+	{
+		$strInputCSV = sub_conv_to_flagged_utf8($ARGV[0]);
+	}
+	unless(-f $strInputCSV){ $strInputCSV = './index.csv'; }
+
+	# 入力CSVファイル名の入力
+	print("入力CSVファイル名（例：./photo/data.csv）\n [".$strInputCSV."]： ");
+	$_ = <STDIN>;
+	chomp;
+	if(length($_)<=0){ $_ = $strInputCSV; }
+	unless(-f sub_conv_to_local_charset($_)){
+		die("終了（理由：CSVファイル " . $_ . " が存在しません）\n");
+	}
+	$strInputCSV = $_;
+
+	$strBaseDir = dirname($strInputCSV);
+	if(substr($strBaseDir,-1) ne '/'){ $strBaseDir .= '/'; }	# ディレクトリは / で終わるように修正
+	$strInputCSV = basename($strInputCSV);
+
+	print("基準ディレクトリ : ".$strBaseDir."\n入力CSVファイル : ".$strInputCSV."\n\n");
+
+	# 出力HTMLファイル名の入力
+	print("出力HTMLファイル名（例：index.html）： ");
+	$_ = <STDIN>;
+	chomp();
+	if(length($_)<=0){ die("終了（理由：ファイル名が入力されませんでした）\n"); }
+	if($_ =~ /\//){ die("終了（理由：ファイル名に / が入っています）\n"); }
+	if(-f sub_conv_to_local_charset($strBaseDir . $_) && -w sub_conv_to_local_charset($strBaseDir . $_)){
+		print("出力HTMLファイル名（既存HTMLに上書き） : " . $_ . "\n\n");
+	}
+	elsif(-f sub_conv_to_local_charset($strBaseDir . $_)){
+		die("終了（理由：出力HTMLファイル " . $_ . " に書き込めません）\n");
+	}
+	else{
+		print("出力HTMLファイル名（新規作成） : " . $_ . "\n\n");
+	}
+	$strOutputHTML = $strBaseDir . $_;
+
+
+}
+
 # 対象画像ファイルを配列に格納する
 sub sub_scan_imagefiles {
 
@@ -750,6 +802,14 @@ sub sub_create_html {
 			"<p>%d files</p>\n",
 			$#arrImageFiles + 1);
 
+		if($flag_nowrite_noexist == 1){
+			foreach(@arrImageFiles){
+				unless(-f $_->[0]){
+					print(FH_OUT "<p>image file ".$_->[1].'/'.$_->[2]." not exist</p>\n");
+				}
+			}
+		}
+
 		if($flag_html_style eq 'line-style') {
 			# 1行1画像形式のとき
 			printf(FH_OUT "<table>\n  <tr><th>dir</th><th>file</th><th>thumbnail</th><th>time</th><th>comment 1</th><th>comment 2</th>" .
@@ -758,6 +818,7 @@ sub sub_create_html {
 		
 		foreach(@arrImageFiles)
 		{
+			if($flag_nowrite_noexist == 1 && !(-f $_->[0])){ next; }	# 存在しない画像をスキップ
 			my $strFilenameInput = $_->[1] . '/' . $_->[2];		# 画像への相対パス
 			my @tm = localtime($_->[4]);
 			chomp($strFilenameInput);
@@ -809,6 +870,19 @@ sub sub_create_html {
 
 }
 
+# ファイルに上書きする場合、ファイル末尾に.001〜.999を付けてバックアップファイルを作成する
+# 引数：対象ファイル
+sub sub_make_backupfile {
+	my $strTargetFile = shift;
+
+	for(my $i=0; $i<1000; $i++){
+		my $strBackupFile = sprintf("%s\.%03d",$strTargetFile,$i);
+		if(-e sub_conv_to_local_charset($strBackupFile)){ next; }
+		File::Copy::copy(sub_conv_to_local_charset($strOutputHTML), sub_conv_to_local_charset($strBackupFile)) or next;
+		print("バックアップファイル ".$strBackupFile." を作成しました\n");
+		last;
+	}
+}
 
 # HTMLファイルを読み込んで、CSVデータに切り分ける
 # 
@@ -885,7 +959,7 @@ sub sub_parse_html {
 						# CSV1行完成。ファイルに出力
 						# テーブル1行に複数のデータがある場合にココで引っかかる
 						# （空白時の前行からのコピーはこのモードでは行わない）
-						if($#arrCsvRaw > 1){ sub_read_from_csv(\@arrCsvRaw); }
+						if($#arrCsvRaw > 1){ sub_parse_html_datastore(\@arrCsvRaw); }
 						@arrCsvRaw = ();
 						$flag_indata = 0;
 					}
@@ -924,7 +998,7 @@ sub sub_parse_html {
 		}
 
 		# CSV1行完成。ファイルに出力
-		if($#arrCsvRaw > 1){ sub_read_from_csv(\@arrCsvRaw); }
+		if($#arrCsvRaw > 1){ sub_parse_html_datastore(\@arrCsvRaw); }
 	});
 
 	print("既存HTMLファイルから ".($#arrImageFiles >= 0 ? ($#arrImageFiles+1) : ($#arrCsv+1))." 行のデータをインポートしました\n");
@@ -953,7 +1027,7 @@ sub GetAttribValue
 # CSVデータの形式："a href","img src", "unix date", "comment1", "comment2"
 #
 # csv2html-thumb.pl の関数を流用
-sub sub_read_from_csv {
+sub sub_parse_html_datastore {
 	my $ref_arrFields = shift;	# 引数：CSVデータ配列のリファレンス
 
 	if($flag_mode eq 'html2csv'){
@@ -978,6 +1052,12 @@ sub sub_read_from_csv {
 		$arrTemp[6] =~ s/<br>/<br \/>/g;		# <br>→<br />
 		$arrTemp[8] =~ s/<br>/<br \/>/g;		# <br>→<br />
 
+		# 画像ファイルがhtmlからの相対パスの場合、アクセス可能な"フルパス"に直す
+		unless($arrTemp[0] =~ m/^$strBaseDir/){
+			$arrTemp[0] =~ s|^\./||;	# 先頭が ./ の場合除去する
+			$arrTemp[0] = $strBaseDir . $arrTemp[0];
+		}
+
 		push(@arrImageFiles, \@arrTemp);
 	}
 
@@ -996,7 +1076,74 @@ sub sub_write_csv {
 }
 
 
-# 
+# 画像一覧を格納したCSVファイルを読み込んで、対象画像を確定する
+sub sub_read_from_csv {
+
+	my $csv = Text::CSV_XS->new({binary=>1});
+	my $exifTool = Image::ExifTool->new();
+#	$exifTool->Options(DateFormat => "%s", StrictDate=> 1);		# Windows版ActivePerlでは%sはサポート外
+	$exifTool->Options(DateFormat => "%Y,%m,%d,%H,%M,%S", StrictDate=> 1);
+
+	# CSVファイルのエンコードを検出する
+	my $enc = undef;
+	if($flag_read_encode ne ''){ $enc = $flag_read_encode; }
+	else{ $enc = sub_get_encode_of_file($strBaseDir.$strInputCSV); }
+	if($enc eq ''){
+		print("入力ファイルのエンコードが正しく判定できませんでした。$flag_charcode で読み込みます\n");
+		$enc = $flag_charcode;
+	}
+
+	open(FH_IN, "<".$strBaseDir.$strInputCSV) or die("ファイル $strInputCSV を読み込めません");
+	my $nTargetFiles = 0;
+	while(<FH_IN>)
+	{
+		# CSV各行をパースして、ファイル名とコメントを配列$arrFileAndCommentに格納
+		my $strLine = sub_conv_to_flagged_utf8($_, $enc);
+		if($strLine eq ''){ next; }
+		$csv->parse($strLine) or next;
+		my @arrFields = $csv->fields();
+		if($#arrFields < 1){ next; }		# 要素数2以下のときはスキップ
+		my @arrTemp = ($arrFields[0],		# [0]:画像ファイル名（dir + basename)
+				dirname($arrFields[0]),	# [1]:画像ファイルのdir
+				basename($arrFields[0]),	# [2]:画像ファイルのbasename
+				$arrFields[1],		# [3]:サムネイルファイル名 (dir + basename)
+				defined($arrFields[2]) ? $arrFields[2] : 0,	# [4]:unix時間
+				defined($arrFields[3]) ? $arrFields[3] : '',	# [5]:comment1
+				defined($arrFields[4]) ? $arrFields[4] : '',	# [6]:comment2
+				'',		# [7]: Exif回転情報
+				defined($arrFields[5]) ? $arrFields[5] : '',	# [8]:comment3
+				);
+		$arrTemp[5] =~ s/<br>/<br \/>/g;		# <br>→<br />
+		$arrTemp[6] =~ s/<br>/<br \/>/g;		# <br>→<br />
+		$arrTemp[8] =~ s/<br>/<br \/>/g;		# <br>→<br />
+
+
+		# 画像ファイルがhtmlからの相対パスの場合、アクセス可能な"フルパス"に直す
+		unless($arrTemp[0] =~ m/^$strBaseDir/){
+			$arrTemp[0] =~ s|^\./||;	# 先頭が ./ の場合除去する
+			$arrTemp[0] = $strBaseDir . $arrTemp[0];
+		}
+
+		# 画像ファイルからExif日時を読み込む
+		if(-f $arrTemp[0])
+		{
+			$exifTool->ImageInfo(sub_conv_to_local_charset($arrTemp[0]));
+			my $tmpDate = $exifTool->GetValue('CreateDate');
+			if(!defined($tmpDate)){ $tmpDate = (stat(sub_conv_to_local_charset($arrTemp[0])))[9]; }	# Exifが無い場合は最終更新日
+			else{
+				my @arrTime_t = split(/,/,$tmpDate);
+				$tmpDate = mktime($arrTime_t[5], $arrTime_t[4], $arrTime_t[3], $arrTime_t[2], $arrTime_t[1]-1, $arrTime_t[0]-1900);
+			}
+			if(defined($tmpDate)){ $arrTemp[4] = $tmpDate; }
+		}
+
+		push(@arrImageFiles, \@arrTemp);
+		$nTargetFiles++;
+	}
+	close(FH_IN) or die("ファイル ".$strInputCSV." を close 出来ませんでした");
+
+}
+
 
 # 引数で与えられたファイルの、arrImageFiles内のインデックスを返す
 # 戻り値：0 - $#arrImageFiles の場合一致した。-1の場合一致するものが無い
