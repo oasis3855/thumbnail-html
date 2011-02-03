@@ -154,7 +154,7 @@ exit();
 
 # 処理モードの選択
 sub sub_user_select_mode {
-	print("処理モードの選択\n 1. サムネイルHTMLを作成\n 2. html を csv に変換（alpha ver）\n 3. csvをhtmlに変換（未実装）\n選択してください (1-3) [1] : ");
+	print("処理モードの選択\n 1. サムネイルHTMLを作成\n 2. html を csv に変換\n 3. csvをhtmlに変換\n選択してください (1-3) [1] : ");
 		$_ = <STDIN>;
 		chomp;
 		if(length($_)<=0 || uc($_) eq '1'){ $flag_mode = 'thumbhtml'; }
@@ -329,16 +329,18 @@ sub sub_user_input_init {
 	}
 
 	# ソート順の選択
-	print("ソート順を選択\n1: ファイル順（A...Z）\n2: ファイル順（Z...A）\n3: Exif/タイムスタンプ順（過去->未来）\n4: Exif/タイムスタンプ順（未来->過去）\n (1-4) ?  [1]：");
+	print("ソート順を選択\n1: ファイル順（A...Z）\n2: ファイル順（Z...A）\n3: Exif/タイムスタンプ順（過去->未来）\n4: Exif/タイムスタンプ順（未来->過去）\n".
+		"5: Comment1-Comment2-タイムスタンプ\n(1-5) ?  [3]：");
 	$_ = <STDIN>;
 	chomp();
 	if(length($_)<=0){ $_ = 1; }
-	if(int($_)<1 || int($_)>4){ die("終了（入力範囲は 1 - 4 です）\n"); }
+	if(int($_)<1 || int($_)>5){ die("終了（入力範囲は 1 - 5 です）\n"); }
 	switch(int($_)){
 		case 1	{ $flag_sort_order='file-name'; }
 		case 2	{ $flag_sort_order='file-name-reverse'; }
 		case 3	{ $flag_sort_order='file-date'; }
 		case 4	{ $flag_sort_order='file-date-reverse'; }
+		case 5	{ $flag_sort_order='c1-c2-date'; }
 		else	{ $flag_sort_order='file-name'; }
 	}
 	print("ソート順 : " . $flag_sort_order . "\n\n");
@@ -694,6 +696,9 @@ sub sub_sort_imagefiles {
 		case 'file-date-reverse'	{
 			@arrImageFiles = sort { @$a[1] cmp @$b[1] || @$b[4] cmp @$a[4] } @arrImageFiles;
 		}
+		case 'c1-c2-date'	{
+			@arrImageFiles = sort { @$a[5] cmp @$b[5] || @$a[6] cmp @$b[6] || @$a[4] cmp @$b[4]} @arrImageFiles;
+		}
 	}
 
 }
@@ -836,6 +841,19 @@ sub sub_create_html {
 			"      margin: 0;" .
 			"      padding: 0;\n" .
 			"  }\n" .
+			"  h3 {".
+			"	font-size: 12pt;".
+			"	font-weight: lighter;".
+			"	text-indent: 5px;".
+			"	letter-spacing: 3px;".
+			"	border-width: 0px 0px 1px 5px;".
+			"	border-style: solid;".
+			"	border-bottom-color: #b87330;".
+			"	border-left-color: #b87330;".
+			"	padding: 2px 5px;".
+			"	margin: 8px 0px 3px;".
+			"	clear: both;".
+			"  }\n".
 			"  div.gallerybox {\n".
 			"      display: block;".
 			"      position: relative;".
@@ -844,6 +862,9 @@ sub sub_create_html {
 			"      min-width: 50px;".
 			"      min-height: 50px;".
 			"      font-size: 10pt;\n".
+			"  }\n".
+			"  div.g-comment2 {\n".
+			"      line-height: 1.0em;".
 			"  }\n".
 			"-->\n  </style>\n" .
 			"</head>\n" .
@@ -864,7 +885,8 @@ sub sub_create_html {
 			printf(FH_OUT "<table>\n  <tr><th>dir</th><th>file</th><th>thumbnail</th><th>time</th><th>comment 1</th><th>comment 2</th>" .
 			($flag_use_comment3 == 1 ? "<th>F</th>" : "" ) . "</tr>\n");
 		}
-		
+	
+		my $str_prev_comment1 = '';
 		foreach(@arrImageFiles)
 		{
 			if($flag_nowrite_noexist == 1 && !(-f $_->[0])){ next; }	# 存在しない画像をスキップ
@@ -890,15 +912,34 @@ sub sub_create_html {
 					($flag_use_comment3 == 1 ? $_->[8] : ''));	# [8]: comment 3
 			}
 			elsif($flag_html_style eq 'grid-style') {
-				printf(FH_OUT "<div class=\"gallerybox\" style=\"width:%dpx; height:%dpx;\"><div class=\"g-photo\"><a href=\"%s\"><img src=\"%s\" alt=\"\" width=\"%d\" height=\"%d\" /></a></div><div class=\"g-date\">%04d/%02d/%02d %02d:%02d:%02d</div><div class=\"g-comment1\">%s</div><div class=\"g-comment2\">%s</div></div>\n",
-					$arrSize[0] > $arrSize[1] ? $arrSize[0]+10 : $arrSize[1]+10,
-					$arrSize[0] > $arrSize[1] ? $arrSize[0]+40 : $arrSize[1]+40,
-					$strFilenameInput,
-					$strFilenameOutput,
-					$arrSize[0], $arrSize[1],
-					$tm[5]+1900, $tm[4]+1, $tm[3], $tm[2], $tm[1], $tm[0],	# [4] : unix秒
-					$_->[5],	# [5]: comment 1
-					$_->[6]);	# [6]: comment 2
+				if($flag_sort_order eq 'c1-c2-date'){
+					if($_->[5] ne $str_prev_comment1){
+						my $str_comment = $_->[5];
+						$str_comment =~ s#(<br>|<br />)##ig;
+						print(FH_OUT "<h3>".$str_comment."</h3>\n");
+						$str_prev_comment1 = $_->[5];
+					}
+					my $str_comment = $_->[6];	# [6]: comment 2
+					$str_comment =~ s#(<br>|<br />)#, #ig;
+					printf(FH_OUT "<div class=\"gallerybox\" style=\"width:%dpx; height:%dpx;\"><div class=\"g-photo\"><a href=\"%s\"><img src=\"%s\" alt=\"\" width=\"%d\" height=\"%d\" /></a></div><div class=\"g-comment2\">%s</div></div>\n",
+						$arrSize[0] > $arrSize[1] ? $arrSize[0]+10 : $arrSize[1]+10,
+						$arrSize[0] > $arrSize[1] ? $arrSize[0]+60 : $arrSize[1]+60,
+						$strFilenameInput,
+						$strFilenameOutput,
+						$arrSize[0], $arrSize[1],
+						$str_comment);
+				}
+				else{
+					printf(FH_OUT "<div class=\"gallerybox\" style=\"width:%dpx; height:%dpx;\"><div class=\"g-photo\"><a href=\"%s\"><img src=\"%s\" alt=\"\" width=\"%d\" height=\"%d\" /></a></div><div class=\"g-date\">%04d/%02d/%02d %02d:%02d:%02d</div><div class=\"g-comment1\">%s</div><div class=\"g-comment2\">%s</div></div>\n",
+						$arrSize[0] > $arrSize[1] ? $arrSize[0]+10 : $arrSize[1]+10,
+						$arrSize[0] > $arrSize[1] ? $arrSize[0]+40 : $arrSize[1]+40,
+						$strFilenameInput,
+						$strFilenameOutput,
+						$arrSize[0], $arrSize[1],
+						$tm[5]+1900, $tm[4]+1, $tm[3], $tm[2], $tm[1], $tm[0],	# [4] : unix秒
+						$_->[5],	# [5]: comment 1
+						$_->[6]);	# [6]: comment 2
+				}
 			}
 
 		}
