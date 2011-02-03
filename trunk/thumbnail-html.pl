@@ -536,6 +536,55 @@ sub sub_user_input_init_csv2html {
 	$strOutputHTML = $strBaseDir . $_;
 
 
+	# 既存HTMLを読み込むかどうか
+	print("CSVから移行するデータの範囲\n 1: 全て移行\n 2: 画像とコメントのみ移行（日時とサムネイル名再構築）\n 選択してください (1/2) [2]：");
+	$_ = <STDIN>;
+	chomp;
+	if(length($_)<=0){  $flag_read_html = 2; }
+	elsif(uc($_) eq '1'){ $flag_read_html = 1; }
+	elsif(uc($_) eq '2'){ $flag_read_html = 2; }
+	else { die("選択肢 1-2 以外が入力されたため終了します") }
+	if($flag_read_html == 1){ print("CSV読み込みモード : 全データ\n\n"); }
+	if($flag_read_html == 2){ print("CSV読み込みモード : 画像とコメントのみ\n\n"); }
+
+
+	if($flag_read_html == 2){
+		# サムネイル ディレクトリの入力（無い場合は、新規作成）
+		print("サムネイル ディレクトリ名（例：thumb/）[thumb]： ");
+		$_ = <STDIN>;
+		chomp();
+		if(length($_)<=0){ $_ = 'thumb'; }
+		if(substr($_,0,1) eq '/' || substr($_,0,2) eq './'){ die("終了（理由：/ や ./ で始まらない相対ディレクトリを入力してください）\n"); }
+		if(substr($_,-1) ne '/'){ $_ .= '/'; }	# ディレクトリは / で終わるように修正
+		print("サムネイル ディレクトリ（画像ディレクトリ下） : " . $_ . "\n\n");
+		$strThumbRelativeDir = $_;
+	}
+
+	# サムネイル画像のサイズを入力する
+	print("サムネイル画像の長辺ピクセル (10-320) [180]： ");
+	$_ = <STDIN>;
+	chomp();
+	if(length($_)<=0){ $_ = 180; }
+	if(int($_)<10 || int($_)>320){ die("終了（入力範囲は 10 - 320 です）\n"); }
+	$nLongEdge = int($_);
+	print("サムネイルの長辺（px） : " . $nLongEdge . "\n\n");
+
+	# サムネイル作成時の上書き設定
+	print("サムネイル作成時に、ファイルがすでにある場合上書きする (Y/N) [N]：");
+	$_ = <STDIN>;
+	chomp();
+	if(uc($_) eq 'Y'){
+		$flag_overwrite = 1;
+		print("既存のサムネイルファイルには上書きします\n\n");
+	}
+	elsif(uc($_) eq 'N' || length($_)<=0){
+		$flag_overwrite = 0;
+		print("既存のサムネイルファイルがある場合は、それを使います（上書き無し）\n\n");
+	}
+	else{
+		die("終了（Y/Nの選択肢以外が入力された）\n");
+	}
+
 }
 
 # 対象画像ファイルを配列に格納する
@@ -1022,11 +1071,8 @@ sub GetAttribValue
 }
 
 
-# CSVファイルからデータを読み込んで、配列に格納する
-# 
-# CSVデータの形式："a href","img src", "unix date", "comment1", "comment2"
-#
-# csv2html-thumb.pl の関数を流用
+# HTMLからデータを読み込んで、所定の配列に格納する
+# 引数：HTMLから読み込んだ生データ
 sub sub_parse_html_datastore {
 	my $ref_arrFields = shift;	# 引数：CSVデータ配列のリファレンス
 
@@ -1124,17 +1170,25 @@ sub sub_read_from_csv {
 			$arrTemp[0] = $strBaseDir . $arrTemp[0];
 		}
 
-		# 画像ファイルからExif日時を読み込む
-		if(-f $arrTemp[0])
-		{
-			$exifTool->ImageInfo(sub_conv_to_local_charset($arrTemp[0]));
-			my $tmpDate = $exifTool->GetValue('CreateDate');
-			if(!defined($tmpDate)){ $tmpDate = (stat(sub_conv_to_local_charset($arrTemp[0])))[9]; }	# Exifが無い場合は最終更新日
-			else{
-				my @arrTime_t = split(/,/,$tmpDate);
-				$tmpDate = mktime($arrTime_t[5], $arrTime_t[4], $arrTime_t[3], $arrTime_t[2], $arrTime_t[1]-1, $arrTime_t[0]-1900);
+		# 画像自体と、コメント以外は再構築するモードの時
+		if($flag_read_html == 2){
+			# 画像ファイルからExif日時を読み込む
+			if(-f $arrTemp[0])
+			{
+				$exifTool->ImageInfo(sub_conv_to_local_charset($arrTemp[0]));
+				my $tmpDate = $exifTool->GetValue('CreateDate');
+				if(!defined($tmpDate)){ $tmpDate = (stat(sub_conv_to_local_charset($arrTemp[0])))[9]; }	# Exifが無い場合は最終更新日
+				else{
+					my @arrTime_t = split(/,/,$tmpDate);
+					$tmpDate = mktime($arrTime_t[5], $arrTime_t[4], $arrTime_t[3], $arrTime_t[2], $arrTime_t[1]-1, $arrTime_t[0]-1900);
+				}
+				if(defined($tmpDate)){ $arrTemp[4] = $tmpDate; }
 			}
-			if(defined($tmpDate)){ $arrTemp[4] = $tmpDate; }
+			
+			# サムネイルファイルのパスを再構築する
+			my ($basename, $path, $ext) = File::Basename::fileparse($arrTemp[0], @arrKnownSuffix);
+			$arrTemp[3] = $arrTemp[1] . '/' 
+					. $strThumbRelativeDir . $basename.$ext,	# [3]: サムネイルの相対パス
 		}
 
 		push(@arrImageFiles, \@arrTemp);
