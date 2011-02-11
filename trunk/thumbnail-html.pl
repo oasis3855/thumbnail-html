@@ -89,6 +89,7 @@ my $flag_copy_prev = 1;		#「 空白時、前行値のコピーを行う」ス�
 my $flag_html_style = 'line-style';	# line-style:1行1画像table, grid-style:画像をグリッド表示
 my $flag_conv_time = 1;		# csv変換時に「日時をunix秒に変換する」スイッチ
 my $flag_nowrite_noexist = 1;	# html作成時に、存在しないファイルは書き出さない（html更新、csvから変換時用）
+my $flag_ignore_exif = 0;	# exif情報を読み込まない
 
 my $flag_use_comment3 = 1;		# comment 3 フィールドを用いる (0:NO, 1:YES)
 
@@ -147,6 +148,16 @@ elsif($flag_mode eq 'csv2html'){
 
 	sub_create_html();
 }
+elsif($flag_mode eq 'thumb-multidir'){
+	$strImageRelativeDir = undef;
+	sub_user_input_init_multidir();
+	$flag_sort_order = 'file-name';	# ソート順は、ディレクトリ名→ファイル名
+	sub_scan_imagefiles();
+	sub_pick_first_file();
+	foreach(@arrImageFiles){
+		print(Data::Dumper->Dumper(\$_)."\n");
+	}
+}
 print("正常終了\n");
 
 exit();
@@ -154,12 +165,13 @@ exit();
 
 # 処理モードの選択
 sub sub_user_select_mode {
-	print("処理モードの選択\n 1. サムネイルHTMLを作成\n 2. html を csv に変換\n 3. csvをhtmlに変換\n選択してください (1-3) [1] : ");
+	print("処理モードの選択\n 1. サムネイルHTMLを作成\n 2. html を csv に変換\n 3. csvをhtmlに変換\n 4. 複数ディレクトリの最初の1枚を抜き出してサムネイルthml作成\n選択してください (1-3) [1] : ");
 		$_ = <STDIN>;
 		chomp;
 		if(length($_)<=0 || uc($_) eq '1'){ $flag_mode = 'thumbhtml'; }
 		elsif(uc($_) eq '2'){ $flag_mode = 'html2csv'; }
 		elsif(uc($_) eq '3'){ $flag_mode = 'csv2html'; }
+		elsif(uc($_) eq '4'){ $flag_mode = 'thumb-multidir'; }
 		else { die("選択肢 1-3 以外が入力されたため終了します") }
 
 		print("処理モード : $flag_mode\n\n");
@@ -345,6 +357,21 @@ sub sub_user_input_init {
 	}
 	print("ソート順 : " . $flag_sort_order . "\n\n");
 
+	# Exif情報を読み込むか選択
+	print("Exif情報（回転・撮影日時）がある場合読み込みますか (Y/N) [Y]：");
+	$_ = <STDIN>;
+	chomp();
+	if(uc($_) eq 'N'){
+		$flag_ignore_exif = 1;
+		print("Exif情報を読み込みません\n\n");
+	}
+	elsif(uc($_) eq 'N' || length($_)<=0){
+		$flag_ignore_exif = 0;
+		print("Exif情報を読み込みます\n\n");
+	}
+	else{
+		die("終了（Y/Nの選択肢以外が入力された）\n");
+	}
 
 	# HTML形式の選択
 	print("HTMLレイアウトの選択\n 1: 1画像 1行のtable（再読込対応版）\n 2: 画像グリッド（再読込不可）\n (1/2) ? [1] ：");
@@ -589,6 +616,129 @@ sub sub_user_input_init_csv2html {
 
 }
 
+# 初期データの入力（thumbhtml-multidirモード）
+sub sub_user_input_init_multidir {
+
+	# プログラムの引数は、対象ディレクトリとする
+	if($#ARGV == 0 && length($ARGV[0])>1)
+	{
+		$strBaseDir = sub_conv_to_flagged_utf8($ARGV[0]);
+	}
+
+	# 基準ディレクトリの入力
+	print("基準ディレクトリを、絶対または相対ディレクトリで入力。\n（例：/home/user/, ./）");
+	if(length($strBaseDir)>0){ print("[$strBaseDir] :"); }
+	else{ print(":"); }
+	$_ = <STDIN>;
+	chomp();
+	if(length($_)<=0){
+		if(length($strBaseDir)>0){ $_ = $strBaseDir; }	# スクリプトの引数のデフォルトを使う場合
+		else{ die("終了（理由：ディレクトリが入力されませんでした）\n"); }
+	}
+	if(substr($_,-1) ne '/'){ $_ .= '/'; }	# ディレクトリは / で終わるように修正
+	unless(-d sub_conv_to_local_charset($_)){ die("終了（理由：ディレクトリ ".$_." が存在しません）\n"); }
+	$strBaseDir = $_;
+	print("基準ディレクトリ : " . $strBaseDir . "\n\n");
+
+	# File::Find::Ruleでの検索深さの入力
+	if(!defined($strImageRelativeDir)){
+		print("画像ディレクトリの検索深さの開始値。基準ディレクトリを1とする。\n (1-10) [2]： ");
+		$_ = <STDIN>;
+		chomp();
+		if(length($_)<=0){ $_ = 2; }
+		if(int($_)<1 || int($_)>10){ die("終了（入力範囲は 1 - 10 です）\n"); }
+		$nFindMinDepth = int($_);
+
+		print("画像ディレクトリの検索深さの終了値。基準ディレクトリを1とする。\n ($nFindMinDepth-10) [$nFindMinDepth] ： ");
+		$_ = <STDIN>;
+		chomp();
+		if(length($_)<=0){ $_ = $nFindMinDepth; }
+		if(int($_)<$nFindMinDepth || int($_)>10){ die("終了（入力範囲は $nFindMinDepth - 10 です）\n"); }
+		$nFindMaxDepth = int($_);
+	
+		print("画像ディレクトリの検索深さ : $nFindMinDepth - $nFindMaxDepth\n\n");
+	}
+
+	# サムネイル ディレクトリの入力（無い場合は、新規作成）
+	print("サムネイル ディレクトリ名（例：thumb/）[thumb]： ");
+	$_ = <STDIN>;
+	chomp();
+	if(length($_)<=0){ $_ = 'thumb'; }
+	if(substr($_,0,1) eq '/' || substr($_,0,2) eq './'){ die("終了（理由：/ や ./ で始まらない相対ディレクトリを入力してください）\n"); }
+	if(substr($_,-1) ne '/'){ $_ .= '/'; }	# ディレクトリは / で終わるように修正
+	print("サムネイル ディレクトリ（画像ディレクトリ下） : " . $_ . "\n\n");
+	$strThumbRelativeDir = $_;
+
+	# サムネイル画像のサイズを入力する
+	print("サムネイル画像の長辺ピクセル (10-320) [180]： ");
+	$_ = <STDIN>;
+	chomp();
+	if(length($_)<=0){ $_ = 180; }
+	if(int($_)<10 || int($_)>320){ die("終了（入力範囲は 10 - 320 です）\n"); }
+	$nLongEdge = int($_);
+	print("サムネイルの長辺（px） : " . $nLongEdge . "\n\n");
+
+	# サムネイル作成時の上書き設定
+	print("サムネイル作成時に、ファイルがすでにある場合上書きする (Y/N) [N]：");
+	$_ = <STDIN>;
+	chomp();
+	if(uc($_) eq 'Y'){
+		$flag_overwrite = 1;
+		print("既存のサムネイルファイルには上書きします\n\n");
+	}
+	elsif(uc($_) eq 'N' || length($_)<=0){
+		$flag_overwrite = 0;
+		print("既存のサムネイルファイルがある場合は、それを使います（上書き無し）\n\n");
+	}
+	else{
+		die("終了（Y/Nの選択肢以外が入力された）\n");
+	}
+
+	# 出力HTMLファイル名の入力
+	print("出力HTMLファイル名（例：index.html）： ");
+	$_ = <STDIN>;
+	chomp();
+	if(length($_)<=0){ die("終了（理由：ファイル名が入力されませんでした）\n"); }
+	if($_ =~ /\//){ die("終了（理由：ファイル名に / が入っています）\n"); }
+	if(-f sub_conv_to_local_charset($strBaseDir . $_) && -w sub_conv_to_local_charset($strBaseDir . $_)){
+		print("出力HTMLファイル名（既存HTMLのアップデート） : " . $_ . "\n\n");
+	}
+	elsif(-f sub_conv_to_local_charset($strBaseDir . $_)){
+		die("終了（理由：出力HTMLファイル " . $_ . " に書き込めません）\n");
+	}
+	else{
+		print("出力HTMLファイル名（新規作成） : " . $_ . "\n\n");
+	}
+	$strOutputHTML = $strBaseDir . $_;
+
+	# Exif情報を読み込むか選択
+	print("Exif情報（回転・撮影日時）がある場合読み込みますか (Y/N) [Y]：");
+	$_ = <STDIN>;
+	chomp();
+	if(uc($_) eq 'N'){
+		$flag_ignore_exif = 1;
+		print("Exif情報を読み込みません\n\n");
+	}
+	elsif(uc($_) eq 'N' || length($_)<=0){
+		$flag_ignore_exif = 0;
+		print("Exif情報を読み込みます\n\n");
+	}
+	else{
+		die("終了（Y/Nの選択肢以外が入力された）\n");
+	}
+
+	# HTML形式の選択
+	print("HTMLレイアウトの選択\n 1: 1画像 1行のtable（再読込対応版）\n 2: 画像グリッド（再読込不可）\n (1/2) ? [1] ：");
+	$_ = <STDIN>;
+	chomp();
+	if(length($_)<=0 || $_ eq '1'){ $flag_html_style = 'line-style'; }
+	elsif($_ eq '2'){ $flag_html_style = 'grid-style'; }
+	else{ die("終了（入力範囲は 1/2 です）\n"); }
+	print("HTMLレイアウト : " . $flag_html_style . "\n\n");
+
+}
+
+
 # 対象画像ファイルを配列に格納する
 sub sub_scan_imagefiles {
 
@@ -615,40 +765,57 @@ sub sub_scan_imagefiles {
 	foreach(@arrScan)
 	{
 		if(length($_) <= 0){ next; }
+print $_."\n";
 		$_ = sub_conv_to_flagged_utf8($_);
 		if($_ =~ /$strThumbRelativeDir$/ || $_ =~ /$strThumbRelativeDir\/$/){ next; }
 		my $strFullPath = $_;
 		my ($basename, $path, $ext) = File::Basename::fileparse($strFullPath, @arrKnownSuffix);
-		$path =~ s/^\.\///g;	# 先頭の ./ を削除
+print $path.",".$basename.",".$ext."\n";
+		$path =~ s|^\.\/||g;	# 先頭の ./ を削除
 		# pathからstrBasenameを除去
 		my $str = $strBaseDir;
-		$str =~ s/^\.\///g;	# 先頭の ./ を削除
+		$str =~ s|^\.\/||g;	# 先頭の ./ を削除
 		$path =~ s/^$str//g;	# パス名から基準ディレクトリを取る
 		# サムネイルファイルに付けるpath文字列を抽出
 		my $dirname = $path;
-		$dirname =~ s/\/$//g;		# 末端の / を除去
+		$dirname =~ s|\/$||g;		# 末端の / を除去
 
 		# 既存ファイル（HTMLまたはCSV）に一致データがある場合、そのインデックス（一致しない場合は -1）
 		my $nMatchLine = -1;
 		if($flag_read_html != 0){ $nMatchLine = sub_check_match_file($dirname.'/'.$basename.$ext); }
 
-		# Exif日時を読み込む
-		$exifTool->ImageInfo(sub_conv_to_local_charset($strFullPath));
-		$tmpDate = $exifTool->GetValue('CreateDate');
-		if(!defined($tmpDate)){ $tmpDate = (stat(sub_conv_to_local_charset($strFullPath)))[9]; }	# Exifが無い場合は最終更新日
-		else{
-			my @arrTime_t = split(/,/,$tmpDate);
-			$tmpDate = mktime($arrTime_t[5], $arrTime_t[4], $arrTime_t[3], $arrTime_t[2], $arrTime_t[1]-1, $arrTime_t[0]-1900);
+		# Exif回転情報（1:0 deg, 3:180 deg, 6:90 deg(CW), 8:270 deg (CW))
+		my $exifRotate = 1;		# 初期値は"回転なし"
+		
+		# Exif読み込み
+		if($flag_ignore_exif == 1){
+			# Exif情報を読み込まないモードの時い
+			$tmpDate = (stat(sub_conv_to_local_charset($strFullPath)))[9];	# Eファイルの最終更新日
 		}
+		else{
+			$exifTool->ImageInfo(sub_conv_to_local_charset($strFullPath));
 
-		# 回転情報を得る（1:0 deg, 3:180 deg, 6:90 deg(CW), 8:270 deg (CW))
-		my $exifRotate = int($exifTool->GetValue('Orientation', 'Raw'));
-		if(!defined($exifRotate) || $exifRotate == 0){ $exifRotate = 1; }
+			# Exif日時を読み込む
+			$tmpDate = $exifTool->GetValue('CreateDate');
+			if(!defined($tmpDate)){ $tmpDate = (stat(sub_conv_to_local_charset($strFullPath)))[9]; }	# Exifが無い場合は最終更新日
+			else{
+				my @arrTime_t = split(/,/,$tmpDate);
+				$tmpDate = mktime($arrTime_t[5], $arrTime_t[4], $arrTime_t[3], $arrTime_t[2], $arrTime_t[1]-1, $arrTime_t[0]-1900);
+			}
 
+			# 回転情報を得る（1:0 deg, 3:180 deg, 6:90 deg(CW), 8:270 deg (CW))
+			$exifRotate = $exifTool->GetValue('Orientation', 'Raw');
+			unless(defined($exifRotate)){ $exifRotate = 1; }
+			else{ $exifRotate = int($exifTool->GetValue('Orientation', 'Raw')); }
+			if($exifRotate == 0){ $exifRotate = 1; }
+			$exifRotate = int($exifTool->GetValue('Orientation', 'Raw'));
+		}
+		
 		if($nMatchLine >= 0 && $flag_read_html == 1){
 			# 全てのデータを移行する場合
 			$arrImageFiles[$nMatchLine][7] = $exifRotate;		# [7]: Exif回転情報
 		}
+
 		elsif($nMatchLine < 0){
 			# 新しいデータを追加する
 			my @arrTemp = ($strFullPath,		# [0]: 画像ファイルへのパス（dir + basename）
@@ -701,6 +868,28 @@ sub sub_sort_imagefiles {
 		}
 	}
 
+}
+
+# 各ディレクトリ、最初のファイルをピックアップ （thumb-multidir用）
+sub sub_pick_first_file {
+	my @arrFirstImageFiles = ();
+	my $n = 1;	# 同一ディレクトリ内のファイル数カウント
+	my $prevdir = '';		# 一つ前の行のディレクトリを保存（数値リセット用）
+
+	foreach(@arrImageFiles){
+		if($_->[1] ne $prevdir){ $n = 1; }	# ディレクトリが変われば数値リセット
+		if($n == 1){
+			my $strip_slash_path = $_->[1];
+			$strip_slash_path =~ s|/|\-|g;
+			$_->[3] = $strBaseDir . $strThumbRelativeDir . $strip_slash_path . '.jpg';
+			push(@arrFirstImageFiles, $_);
+			print($_->[1]."\n");
+		}
+		$_->[4] = $n++;
+		$prevdir = $_->[1];	# ディレクトリ名を保存
+	}
+	@arrImageFiles = ();
+	push(@arrImageFiles, @arrFirstImageFiles);
 }
 
 # 対象ファイルのデバッグ表示
