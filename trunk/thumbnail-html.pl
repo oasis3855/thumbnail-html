@@ -69,15 +69,18 @@ if($flag_charcode eq 'shiftjis'){
 }
 
 
-my $strBaseDir = './';		# 基準ディレクトリ
-my $strImageRelativeDir = '';		# 画像ディレクトリを1つに限定する場合に利用
-my $strThumbRelativeDir = 'thumb/';	# サムネイル格納ディレクトリ
-my $strOutputHTML = 'index.html';	# 出力HTML（基準ディレクトリに出力）
-my $strOutputCSV = 'index.csv';	# 出力CSV（基準ディレクトリに出力）
-my $strInputCSV = './index.csv';	# 出力CSV（基準ディレクトリに出力）
+my $str_dir_base = './';		# 基準ディレクトリ（HTMLファイルやCSVファイルの存在場所）
+my $str_dir_image = undef;		# 画像ディレクトリを1つに限定する場合に利用
+my $str_dir_thumbnail = 'thumb/';	# サムネイル格納ディレクトリ
+my $str_filepath_html = './index.html';	# 入出力HTML（dir + basename）
+my $str_filepath_csv = './index.csv';	# 入出力CSV（dir + basename）
 my $nLongEdge = 150;		# サムネイルの長辺ピクセル数（ImageMagickで縮小時に利用）
 my $nFindMinDepth = 2;		# File::Find::Ruleでの検索深さ（デフォルトは1段目のみ）
 my $nFindMaxDepth = 2;		# File::Find::Ruleでの検索深さ（デフォルトは1段目のみ）
+
+my $str_html_style_bgcol = "\#ffffff";		# HTMLの背景色
+my $str_html_style_fontcol = "\#000000";		# HTMLのフォント色
+my $str_html_style_thbgcolor = "\#f8ede2";	# HTML 表のヘッダ行背景色
 
 my $flag_mode;
 my $flag_read_html = 0;		# 0:既存HTMLを読まない, 1:既存HTMLを全て読み込む, 2:コメントのみ読み込む
@@ -91,7 +94,8 @@ my $flag_conv_time = 1;		# csv変換時に「日時をunix秒に変換する」�
 my $flag_nowrite_noexist = 1;	# html作成時に、存在しないファイルは書き出さない（html更新、csvから変換時用）
 my $flag_ignore_exif = 0;	# exif情報を読み込まない
 
-my $flag_use_comment3 = 1;		# comment 3 フィールドを用いる (0:NO, 1:YES)
+my $flag_html_hide_comment3 = 0;		# HTML出力時にcomment 3 フィールドを隠す (1:YES)
+my $flag_filter_by_comment3 = 0;	# comment 3 の数値が指定された以上であれば出力する
 
 my @arrImageFiles = ();		# 画像ファイルを格納する配列
 my @arrCsv = ();		# CSV書き出し時の全行バッファ
@@ -115,12 +119,8 @@ sub_user_select_mode();	# モードの選択
 
 if($flag_mode eq 'thumbhtml'){
 	sub_user_input_init();	# 初期データの入力
-	if(sub_confirm_init_data() != 1){
-		die("終了（ユーザによるキャンセル）\n");
-	}
 
 	if($flag_read_html != 0){ sub_parse_html(); }	# 既存HTMLを全て読み込む
-
 	sub_scan_imagefiles();
 	sub_sort_imagefiles();
 	sub_disp_files();	# 入力確認
@@ -128,7 +128,7 @@ if($flag_mode eq 'thumbhtml'){
 	sub_make_thumbnail();
 
 	# 出力ファイルが上書きになる場合、バックアップファイルを作成する
-	if(-e sub_conv_to_local_charset($strOutputHTML)){ sub_make_backupfile($strOutputHTML); }
+	if(-e sub_conv_to_local_charset($str_filepath_html)){ sub_make_backupfile($str_filepath_html); }
 
 	sub_create_html();
 }
@@ -142,12 +142,12 @@ elsif($flag_mode eq 'csv2html'){
 	sub_read_from_csv();
 	sub_make_thumbnail();
 	# 出力ファイルが上書きになる場合、バックアップファイルを作成する
-	if(-e sub_conv_to_local_charset($strOutputHTML)){ sub_make_backupfile($strOutputHTML); }
+	if(-e sub_conv_to_local_charset($str_filepath_html)){ sub_make_backupfile($str_filepath_html); }
 
 	sub_create_html();
 }
 elsif($flag_mode eq 'thumb-multidir'){
-	$strImageRelativeDir = undef;
+	$str_dir_image = undef;
 	sub_user_input_init_multidir();
 	sub_scan_imagefiles();
 	$flag_sort_order = 'file-name';	# ソート順は、ディレクトリ名→ファイル名
@@ -155,9 +155,8 @@ elsif($flag_mode eq 'thumb-multidir'){
 	sub_pick_first_file();
 	sub_make_thumbnail();
 	# 出力ファイルが上書きになる場合、バックアップファイルを作成する
-	if(-e sub_conv_to_local_charset($strOutputHTML)){ sub_make_backupfile($strOutputHTML); }
+	if(-e sub_conv_to_local_charset($str_filepath_html)){ sub_make_backupfile($str_filepath_html); }
 
-	$flag_html_style = 'grid-multidir-style';
 	sub_create_html();
 }
 print("正常終了\n");
@@ -182,26 +181,34 @@ sub sub_user_select_mode {
 # 初期データの入力（thumbhtmlモード）
 sub sub_user_input_init {
 
-	# プログラムの引数は、対象ディレクトリとする
+	# プログラムの引数は、出力HTMLファイル（dir + basename）とする
 	if($#ARGV == 0 && length($ARGV[0])>1)
 	{
-		$strBaseDir = sub_conv_to_flagged_utf8($ARGV[0]);
+		$str_filepath_html = sub_conv_to_flagged_utf8($ARGV[0]);
 	}
 
-	# 基準ディレクトリの入力
-	print("基準ディレクトリを、絶対または相対ディレクトリで入力。\n（例：/home/user/, ./）");
-	if(length($strBaseDir)>0){ print("[$strBaseDir] :"); }
-	else{ print(":"); }
+	# 出力HTMLファイルの指定（dir + basename）
+	print("出力HTMLファイルを、絶対または相対ディレクトリで付き入力。".
+		"\n（例：/home/user/index.html, ./index.html）[".$str_filepath_html."] :");
 	$_ = <STDIN>;
 	chomp();
-	if(length($_)<=0){
-		if(length($strBaseDir)>0){ $_ = $strBaseDir; }	# スクリプトの引数のデフォルトを使う場合
-		else{ die("終了（理由：ディレクトリが入力されませんでした）\n"); }
+	unless(length($_)<=0){ $str_filepath_html = $_; }
+	# ディレクトリが存在するか検査
+	$str_dir_base = dirname($str_filepath_html);
+	if(substr($str_dir_base,-1) ne '/'){ $str_dir_base .= '/'; }	# ディレクトリは / で終わるように修正
+	unless(-d sub_conv_to_local_charset($str_dir_base)){ die("終了（理由：ディレクトリ ".$str_dir_base." が存在しません）\n"); }
+	print("基準ディレクトリ : " . $str_dir_base . "\n");
+	# 出力ファイルが存在するか検査
+	if(-f sub_conv_to_local_charset($str_filepath_html) && -w sub_conv_to_local_charset($str_filepath_html)){
+		print("出力HTMLファイル（既存HTMLのアップデート） : " . basename($str_filepath_html) . "\n\n");
+		$flag_read_html = 1;	# 既存ファイルデータがあることを示すフラグ
 	}
-	if(substr($_,-1) ne '/'){ $_ .= '/'; }	# ディレクトリは / で終わるように修正
-	unless(-d sub_conv_to_local_charset($_)){ die("終了（理由：ディレクトリ ".$_." が存在しません）\n"); }
-	$strBaseDir = $_;
-	print("基準ディレクトリ : " . $strBaseDir . "\n\n");
+	elsif(-f sub_conv_to_local_charset($str_filepath_html)){
+		die("終了（理由：出力HTMLファイル " . basename($str_filepath_html) . " に書き込めません）\n");
+	}
+	else{
+		print("出力HTMLファイル（新規作成） : " . basename($str_filepath_html) . "\n\n");
+	}
 
 
 	# 対象ディレクトリを限定する場合の入力
@@ -209,19 +216,19 @@ sub sub_user_input_init {
 	$_ = <STDIN>;
 	chomp();
 	if(length($_)<=0){
-		$strImageRelativeDir = undef;
+		$str_dir_image = undef;
 		print("（基準ディレクトリ以下の）全てのディレクトリの画像ファイル対象とします\n\n");
 	}
 	else{
 		if(substr($_,0,1) eq '/' || substr($_,0,2) eq './'){ die("終了（理由：/ や ./ で始まらない相対ディレクトリを入力してください）\n"); }
 		if(substr($_,-1) ne '/'){ $_ .= '/'; }	# ディレクトリは / で終わるように修正
-		unless(-d sub_conv_to_local_charset($strBaseDir.$_)){ die("終了（理由：ディレクトリ ".$_." が存在しません）\n"); }
-		$strImageRelativeDir = $_;
-		print("画像ディレクトリの限定（基準ディレクトリからの相対） : " . $strImageRelativeDir . "\n\n");
+		unless(-d sub_conv_to_local_charset($str_dir_base.$_)){ die("終了（理由：ディレクトリ ".$_." が存在しません）\n"); }
+		$str_dir_image = $_;
+		print("画像ディレクトリの限定（基準ディレクトリからの相対） : " . $str_dir_image . "\n\n");
 	}
 
 	# File::Find::Ruleでの検索深さの入力
-	if(!defined($strImageRelativeDir)){
+	if(!defined($str_dir_image)){
 		print("画像ディレクトリの検索深さの開始値。基準ディレクトリを1とする。\n (1-10) [2]： ");
 		$_ = <STDIN>;
 		chomp();
@@ -239,63 +246,11 @@ sub sub_user_input_init {
 		print("画像ディレクトリの検索深さ : $nFindMinDepth - $nFindMaxDepth\n\n");
 	}
 
-
-	# サムネイル ディレクトリの入力（無い場合は、新規作成）
-	print("サムネイル ディレクトリ名（例：thumb/）[thumb]： ");
-	$_ = <STDIN>;
-	chomp();
-	if(length($_)<=0){ $_ = 'thumb'; }
-	if(substr($_,0,1) eq '/' || substr($_,0,2) eq './'){ die("終了（理由：/ や ./ で始まらない相対ディレクトリを入力してください）\n"); }
-	if(substr($_,-1) ne '/'){ $_ .= '/'; }	# ディレクトリは / で終わるように修正
-	print("サムネイル ディレクトリ（画像ディレクトリ下） : " . $_ . "\n\n");
-	$strThumbRelativeDir = $_;
-
-	# サムネイル画像のサイズを入力する
-	print("サムネイル画像の長辺ピクセル (10-320) [180]： ");
-	$_ = <STDIN>;
-	chomp();
-	if(length($_)<=0){ $_ = 180; }
-	if(int($_)<10 || int($_)>320){ die("終了（入力範囲は 10 - 320 です）\n"); }
-	$nLongEdge = int($_);
-	print("サムネイルの長辺（px） : " . $nLongEdge . "\n\n");
-
-	# サムネイル作成時の上書き設定
-	print("サムネイル作成時に、ファイルがすでにある場合上書きする (Y/N) [N]：");
-	$_ = <STDIN>;
-	chomp();
-	if(uc($_) eq 'Y'){
-		$flag_overwrite = 1;
-		print("既存のサムネイルファイルには上書きします\n\n");
-	}
-	elsif(uc($_) eq 'N' || length($_)<=0){
-		$flag_overwrite = 0;
-		print("既存のサムネイルファイルがある場合は、それを使います（上書き無し）\n\n");
-	}
-	else{
-		die("終了（Y/Nの選択肢以外が入力された）\n");
-	}
-
-	# 出力HTMLファイル名の入力
-	print("出力HTMLファイル名（例：index.html）： ");
-	$_ = <STDIN>;
-	chomp();
-	if(length($_)<=0){ die("終了（理由：ファイル名が入力されませんでした）\n"); }
-	if($_ =~ /\//){ die("終了（理由：ファイル名に / が入っています）\n"); }
-	if(-f sub_conv_to_local_charset($strBaseDir . $_) && -w sub_conv_to_local_charset($strBaseDir . $_)){
-		print("出力HTMLファイル名（既存HTMLのアップデート） : " . $_ . "\n\n");
-		$flag_read_html = 1;	# 既存ファイルデータがあることを示すフラグ
-	}
-	elsif(-f sub_conv_to_local_charset($strBaseDir . $_)){
-		die("終了（理由：出力HTMLファイル " . $_ . " に書き込めません）\n");
-	}
-	else{
-		print("出力HTMLファイル名（新規作成） : " . $_ . "\n\n");
-	}
-	$strOutputHTML = $strBaseDir . $_;
+	sub_user_input_thumbsetting();
 
 	# 既存HTMLを読み込むかどうか
 	if($flag_read_html == 1){
-		print("既存HTMLファイルを読み込んで反映しますか\n 0: 読み込まない（新たにつくる）\n 1: 全て読み込む\n 2: コメントのみ一致するJPEGがあれば読み込む\n 選択してください (0-2) [2]：");
+		print("既存HTMLファイルを読み込んで反映しますか\n 0: 読み込まない（新たにつくる）\n 1: 全て読み込む\n 2: 画像とコメントのみ読み込む（日時とサムネイル名再構築）\n 選択してください (0-2) [2]：");
 		$_ = <STDIN>;
 		chomp;
 		if(length($_)<=0){  $flag_read_html = 2; }
@@ -306,7 +261,7 @@ sub sub_user_input_init {
 
 		if($flag_read_html == 0){ print("既存HTMLの読み込み : OFF\n\n"); }
 		if($flag_read_html == 1){ print("既存HTMLの読み込み : ON（全データ）\n\n"); }
-		if($flag_read_html == 2){ print("既存HTMLの読み込み : ON（コメントのみ）\n\n"); }
+		if($flag_read_html == 2){ print("既存HTMLの読み込み : ON（画像とコメントのみ読み込む）\n\n"); }
 	}
 
 	# コメント欄が空白の場合、前行のデータで保管するかの選択
@@ -375,114 +330,76 @@ sub sub_user_input_init {
 		die("終了（Y/Nの選択肢以外が入力された）\n");
 	}
 
-	# HTML形式の選択
-	print("HTMLレイアウトの選択\n 1: 1画像 1行のtable（再読込対応版）\n 2: 画像グリッド（再読込不可）\n (1/2) ? [1] ：");
-	$_ = <STDIN>;
-	chomp();
-	if(length($_)<=0 || $_ eq '1'){ $flag_html_style = 'line-style'; }
-	elsif($_ eq '2'){ $flag_html_style = 'grid-style'; }
-	else{ die("終了（入力範囲は 1/2 です）\n"); }
-	print("HTMLレイアウト : " . $flag_html_style . "\n\n");
 
+	sub_user_input_htmlstyle();
 
-}
+	# 入力内容の確認
+	print("===========\n主な処理内容の確認\n".
+		" 基準ディレクトリ : ".$str_dir_base."\n".
+		" 出力HTMLファイル : ".basename($str_filepath_html)."\n".
+		" 既存HTML読み込み : ".($flag_read_html == 0 ? '読み込まない' : '読み込む')."\n".
+		" サムネイルディレクトリ : ".$str_dir_thumbnail."\n".
+		" 検索範囲 : ".(defined($str_dir_image)? ($str_dir_image.' 限定') : ('ディレクトリ深さ '.$nFindMinDepth.'-'.$nFindMaxDepth))."\n".
+		" サムネイル長辺px : ".$nLongEdge."\n".
+		" サムネイル上書き : ".($flag_overwrite == 1 ? 'ON' : 'OFF')."\n".
+		" ソート順序 : ".$flag_sort_order."\n".
+		"\nこの内容で処理開始しますか ? (Y/N) [N] : ");
 
-
-# 初期設定の確認
-sub sub_confirm_init_data {
-
-	printf("\n===============\n".
-		"基準ディレクトリ：%s\n".
-		"画像ディレクトリ：%s\n".
-		"%s".
-		"サムネイルディレクトリ：%s\n".
-		"サムネイル長辺：%d px\n".
-		"サムネイル強制上書き：%s\n".
-		"出力HTMLファイル名：./%s\n".
-		"ソート順：%s\n",
-		$strBaseDir,
-		defined($strImageRelativeDir) ? $strBaseDir . $strImageRelativeDir : '全てのディレクトリ',
-		defined($strImageRelativeDir) ? '' : '検索深さの設定：'.$nFindMinDepth.' - '.$nFindMaxDepth."\n",
-		$strBaseDir . $strThumbRelativeDir,
-		$nLongEdge,
-		$flag_overwrite == 1 ? 'ON' : 'OFF',
-		$strOutputHTML,
-		$flag_sort_order);
-
-	# Y/N 確認
-	print("この内容で処理しますか (y/N)：");
 	$_ = <STDIN>;
 	chomp();
 	if(uc($_) eq 'Y'){
-		return(1);
+		return();
 	}
-	elsif(uc($_) eq 'N' || length($_)<=0){
-		return(0);
-	}
-	else{
-		die("終了（Y/Nの選択肢以外が入力された）\n");
-	}
-
+	die("終了（キャンセルが選択されたため、処理中止しました）\n");
 }
 
 
 # 初期データの入力（html2csvモード）
 sub sub_user_input_init_html2csv {
 
-	# プログラムの引数は、対象ディレクトリとする
+	# プログラムの引数は、入力HTMLファイル（dir + basename）とする
 	if($#ARGV == 0 && length($ARGV[0])>1)
 	{
-		$strBaseDir = sub_conv_to_flagged_utf8($ARGV[0]);
+		$str_filepath_html = sub_conv_to_flagged_utf8($ARGV[0]);
 	}
 
-	# 基準ディレクトリの入力
-	print("基準ディレクトリを、絶対または相対ディレクトリで入力。\n（例：/home/user/, ./）");
-	if(length($strBaseDir)>0){ print("[$strBaseDir] :"); }
-	else{ print(":"); }
+	# 入力HTMLファイルの指定（dir + basename）
+	print("入力HTMLファイルを、絶対または相対ディレクトリで付き入力。".
+		"\n（例：/home/user/index.html, ./index.html）[".$str_filepath_html."] :");
 	$_ = <STDIN>;
 	chomp();
-	if(length($_)<=0){
-		if(length($strBaseDir)>0){ $_ = $strBaseDir; }	# スクリプトの引数のデフォルトを使う場合
-		else{ die("終了（理由：ディレクトリが入力されませんでした）\n"); }
+	unless(length($_)<=0){ $str_filepath_html = $_; }
+	# ファイルが存在するか検査
+	if(!(-f sub_conv_to_local_charset($str_filepath_html))){
+		die("終了（理由：HTMLファイル " . $str_filepath_html . " が存在しません）\n");
 	}
-	if(substr($_,-1) ne '/'){ $_ .= '/'; }	# ディレクトリは / で終わるように修正
-	unless(-d sub_conv_to_local_charset($_)){ die("終了（理由：ディレクトリ ".$_." が存在しません）\n"); }
-	$strBaseDir = $_;
-	print("基準ディレクトリ : " . $strBaseDir . "\n\n");
+	$str_dir_base = dirname($str_filepath_html);
+	if(substr($str_dir_base,-1) ne '/'){ $str_dir_base .= '/'; }	# ディレクトリは / で終わるように修正
+	print("基準ディレクトリ : " . $str_dir_base . "\n");
+	print("入力HTMLファイル : " . basename($str_filepath_html) . "\n\n");
 
-
-	# 入力HTMLファイル名の入力
-	print("入力HTMLファイル名（例：index.html）： ");
-	$_ = <STDIN>;
-	chomp;
-	if(length($_)<=0){ die("終了（理由：ファイル名が入力されませんでした）\n"); }
-	if($_ =~ /\//){ die("終了（理由：ファイル名に / が入っています）\n"); }
-	if(!(-f sub_conv_to_local_charset($strBaseDir . $_))){
-		die("終了（理由：HTMLファイル " . $_ . " が存在しません）\n");
-	}
-	else{
-		print("入力HTMLファイル名 : " . $_ . "\n\n");
-	}
-	$strOutputHTML = $strBaseDir . $_;
-
+	#出力CSVファイル名の自動構築
+	$str_filepath_csv = $str_dir_base . basename($str_filepath_html, ('.html','.htm','.HTML','.HTM')) . '.csv';
 
 	# 出力CSVファイル名の入力
-	print("出力CSVファイル名（例：index.csv）： ");
+	print("出力CSVファイル名（例：index.csv）[".basename($str_filepath_csv)."] : ");
 	$_ = <STDIN>;
 	chomp();
-	if(length($_)<=0){ die("終了（理由：ファイル名が入力されませんでした）\n"); }
-	if($_ =~ /\//){ die("終了（理由：ファイル名に / が入っています）\n"); }
-	if(-f sub_conv_to_local_charset($strBaseDir . $_) && -w sub_conv_to_local_charset($strBaseDir . $_)){
-		print("出力CSVファイル名（既存CSVに上書き） : " . $_ . "\n\n");
+	unless(length($_)<=0){
+		if($_ =~ /\//){ die("終了（理由：ファイル名に / が入っています）\n"); }
+		$str_filepath_csv = $str_dir_base . $_;
 	}
-	elsif(-f sub_conv_to_local_charset($strBaseDir . $_)){
-		die("終了（理由：出力CSVファイル " . $_ . " に書き込めません）\n");
+	if(-f sub_conv_to_local_charset($str_filepath_csv) && -w sub_conv_to_local_charset($str_filepath_csv)){
+		print("出力CSVファイル（既存CSVに上書き） : " . basename($str_filepath_csv) . "\n\n");
+	}
+	elsif(-f sub_conv_to_local_charset($str_filepath_csv)){
+		die("終了（理由：出力CSVファイル " . basename($str_filepath_csv) . " に書き込めません）\n");
 	}
 	else{
-		print("出力CSVファイル名（新規作成） : " . $_ . "\n\n");
+		print("出力CSVファイル（新規作成） : " . basename($str_filepath_csv) . "\n\n");
 	}
-	$strOutputCSV = $strBaseDir . $_;
 
+	# 日時をUNIX秒に変換するか指定
 	printf("日時（YYYY/MM/DD HH:MM or YYYY/MM/DD HH:MM:SS）をunix秒に変換する (Y/N) [Y] : ");
 	$_ = <STDIN>;
 	chomp;
@@ -505,69 +422,68 @@ sub sub_user_input_init_html2csv {
 	if($flag_copy_prev == 2){ print("Comment 1,2が空白の場合、前行をコピーします\n\n"); }
 
 
-	printf("\n===============\n".
-		"入力 HTML：%s\n".
-		"出力 CSV：%s\n",
-		$strOutputHTML,
-		$strOutputCSV);
+	# 入力内容の確認
+	print("===========\n主な処理内容の確認\n".
+		" 入力 HTML：".$str_filepath_html."\n".
+		" 出力 CSV：".$str_filepath_csv."\n".
+		"\nこの内容で処理開始しますか ? (Y/N) [N] : ");
 
-	# Y/N 確認
-	print("この内容で処理しますか (y/N)：");
 	$_ = <STDIN>;
 	chomp();
 	if(uc($_) eq 'Y'){
-		return(1);
+		return();
 	}
-	die("終了（ユーザによるキャンセル）\n");
-
+	die("終了（キャンセルが選択されたため、処理中止しました）\n");
 }
 
 
 # 初期データの入力（csv2htmlモード）
 sub sub_user_input_init_csv2html {
 
-	# プログラムの引数は、対象ディレクトリとする
+	# プログラムの引数は、入力CSVファイル（dir + basename）とする
 	if($#ARGV == 0 && length($ARGV[0])>1)
 	{
-		$strInputCSV = sub_conv_to_flagged_utf8($ARGV[0]);
+		$str_filepath_csv = sub_conv_to_flagged_utf8($ARGV[0]);
 	}
-	unless(-f $strInputCSV){ $strInputCSV = './index.csv'; }
 
-	# 入力CSVファイル名の入力
-	print("入力CSVファイル名（例：./photo/data.csv）\n [".$strInputCSV."]： ");
-	$_ = <STDIN>;
-	chomp;
-	if(length($_)<=0){ $_ = $strInputCSV; }
-	unless(-f sub_conv_to_local_charset($_)){
-		die("終了（理由：CSVファイル " . $_ . " が存在しません）\n");
-	}
-	$strInputCSV = $_;
-
-	$strBaseDir = dirname($strInputCSV);
-	if(substr($strBaseDir,-1) ne '/'){ $strBaseDir .= '/'; }	# ディレクトリは / で終わるように修正
-	$strInputCSV = basename($strInputCSV);
-
-	print("基準ディレクトリ : ".$strBaseDir."\n入力CSVファイル : ".$strInputCSV."\n\n");
-
-	# 出力HTMLファイル名の入力
-	print("出力HTMLファイル名（例：index.html）： ");
+	# 入力CSVファイルの指定（dir + basename）
+	print("入力CSVファイルを、絶対または相対ディレクトリで付き入力。".
+		"\n（例：/home/user/index.csv, ./index.csv）[".$str_filepath_csv."] :");
 	$_ = <STDIN>;
 	chomp();
-	if(length($_)<=0){ die("終了（理由：ファイル名が入力されませんでした）\n"); }
-	if($_ =~ /\//){ die("終了（理由：ファイル名に / が入っています）\n"); }
-	if(-f sub_conv_to_local_charset($strBaseDir . $_) && -w sub_conv_to_local_charset($strBaseDir . $_)){
-		print("出力HTMLファイル名（既存HTMLに上書き） : " . $_ . "\n\n");
+	unless(length($_)<=0){ $str_filepath_csv = $_; }
+	# ファイルが存在するか検査
+	if(!(-f sub_conv_to_local_charset($str_filepath_csv))){
+		die("終了（理由：CSVファイル " . $str_filepath_csv . " が存在しません）\n");
 	}
-	elsif(-f sub_conv_to_local_charset($strBaseDir . $_)){
-		die("終了（理由：出力HTMLファイル " . $_ . " に書き込めません）\n");
+	$str_dir_base = dirname($str_filepath_csv);
+	if(substr($str_dir_base,-1) ne '/'){ $str_dir_base .= '/'; }	# ディレクトリは / で終わるように修正
+	print("基準ディレクトリ : " . $str_dir_base . "\n");
+	print("入力CSVファイル : " . basename($str_filepath_csv) . "\n\n");
+
+	#出力HTMLファイル名の自動構築
+	$str_filepath_html = $str_dir_base . basename($str_filepath_csv, ('.csv','.txt','.CSV','.TXT')) . '.html';
+
+	# 出力HTMLファイル名の入力
+	print("出力HTMLファイル名（例：index.html）[".basename($str_filepath_html)."] : ");
+	$_ = <STDIN>;
+	chomp();
+	unless(length($_)<=0){
+		if($_ =~ /\//){ die("終了（理由：ファイル名に / が入っています）\n"); }
+		$str_filepath_html = $str_dir_base . $_;
+	}
+	if(-f sub_conv_to_local_charset($str_filepath_html) && -w sub_conv_to_local_charset($str_filepath_html)){
+		print("出力HTMLファイル（既存HTMLに上書き） : " . basename($str_filepath_html) . "\n\n");
+	}
+	elsif(-f sub_conv_to_local_charset($str_filepath_html)){
+		die("終了（理由：出力HTMLファイル " . basename($str_filepath_html) . " に書き込めません）\n");
 	}
 	else{
-		print("出力HTMLファイル名（新規作成） : " . $_ . "\n\n");
+		print("出力HTMLファイル（新規作成） : " . basename($str_filepath_html) . "\n\n");
 	}
-	$strOutputHTML = $strBaseDir . $_;
 
 
-	# 既存HTMLを読み込むかどうか
+	# 移行データの範囲を指定
 	print("CSVから移行するデータの範囲\n 1: 全て移行\n 2: 画像とコメントのみ移行（日時とサムネイル名再構築）\n 選択してください (1/2) [2]：");
 	$_ = <STDIN>;
 	chomp;
@@ -578,72 +494,63 @@ sub sub_user_input_init_csv2html {
 	if($flag_read_html == 1){ print("CSV読み込みモード : 全データ\n\n"); }
 	if($flag_read_html == 2){ print("CSV読み込みモード : 画像とコメントのみ\n\n"); }
 
+	sub_user_input_thumbsetting();
 
-	if($flag_read_html == 2){
-		# サムネイル ディレクトリの入力（無い場合は、新規作成）
-		print("サムネイル ディレクトリ名（例：thumb/）[thumb]： ");
-		$_ = <STDIN>;
-		chomp();
-		if(length($_)<=0){ $_ = 'thumb'; }
-		if(substr($_,0,1) eq '/' || substr($_,0,2) eq './'){ die("終了（理由：/ や ./ で始まらない相対ディレクトリを入力してください）\n"); }
-		if(substr($_,-1) ne '/'){ $_ .= '/'; }	# ディレクトリは / で終わるように修正
-		print("サムネイル ディレクトリ（画像ディレクトリ下） : " . $_ . "\n\n");
-		$strThumbRelativeDir = $_;
-	}
+	sub_user_input_htmlstyle();
 
-	# サムネイル画像のサイズを入力する
-	print("サムネイル画像の長辺ピクセル (10-320) [180]： ");
-	$_ = <STDIN>;
-	chomp();
-	if(length($_)<=0){ $_ = 180; }
-	if(int($_)<10 || int($_)>320){ die("終了（入力範囲は 10 - 320 です）\n"); }
-	$nLongEdge = int($_);
-	print("サムネイルの長辺（px） : " . $nLongEdge . "\n\n");
+	# 入力内容の確認
+	print("===========\n主な処理内容の確認\n".
+		" 基準ディレクトリ : ".$str_dir_base."\n".
+		" 入力CSVファイル : ".basename($str_filepath_csv)."\n".
+		" 出力HTMLファイル : ".basename($str_filepath_html)."\n".
+		" サムネイルファイル名再構築、Exifデータ再読込 : ".($flag_read_html == 2 ? 'ON' : 'OFF')."\n".
+		($flag_read_html == 2 ? (" サムネイルディレクトリ : ".$str_dir_thumbnail."\n") : '').
+		" サムネイル長辺px : ".$nLongEdge."\n".
+		" サムネイル上書き : ".($flag_overwrite == 1 ? 'ON' : 'OFF')."\n".
+		"\nこの内容で処理開始しますか ? (Y/N) [N] : ");
 
-	# サムネイル作成時の上書き設定
-	print("サムネイル作成時に、ファイルがすでにある場合上書きする (Y/N) [N]：");
 	$_ = <STDIN>;
 	chomp();
 	if(uc($_) eq 'Y'){
-		$flag_overwrite = 1;
-		print("既存のサムネイルファイルには上書きします\n\n");
+		return();
 	}
-	elsif(uc($_) eq 'N' || length($_)<=0){
-		$flag_overwrite = 0;
-		print("既存のサムネイルファイルがある場合は、それを使います（上書き無し）\n\n");
-	}
-	else{
-		die("終了（Y/Nの選択肢以外が入力された）\n");
-	}
+	die("終了（キャンセルが選択されたため、処理中止しました）\n");
 
 }
 
 # 初期データの入力（thumbhtml-multidirモード）
 sub sub_user_input_init_multidir {
 
-	# プログラムの引数は、対象ディレクトリとする
+	# プログラムの引数は、出力HTMLファイル（dir + basename）とする
 	if($#ARGV == 0 && length($ARGV[0])>1)
 	{
-		$strBaseDir = sub_conv_to_flagged_utf8($ARGV[0]);
+		$str_filepath_html = sub_conv_to_flagged_utf8($ARGV[0]);
 	}
 
-	# 基準ディレクトリの入力
-	print("基準ディレクトリを、絶対または相対ディレクトリで入力。\n（例：/home/user/, ./）");
-	if(length($strBaseDir)>0){ print("[$strBaseDir] :"); }
-	else{ print(":"); }
+	# 出力HTMLファイルの指定（dir + basename）
+	print("出力HTMLファイルを、絶対または相対ディレクトリで付き入力。".
+		"\n（例：/home/user/index.html, ./index.html）[".$str_filepath_html."] :");
 	$_ = <STDIN>;
 	chomp();
-	if(length($_)<=0){
-		if(length($strBaseDir)>0){ $_ = $strBaseDir; }	# スクリプトの引数のデフォルトを使う場合
-		else{ die("終了（理由：ディレクトリが入力されませんでした）\n"); }
+	unless(length($_)<=0){ $str_filepath_html = $_; }
+	# ディレクトリが存在するか検査
+	$str_dir_base = dirname($str_filepath_html);
+	if(substr($str_dir_base,-1) ne '/'){ $str_dir_base .= '/'; }	# ディレクトリは / で終わるように修正
+	unless(-d sub_conv_to_local_charset($str_dir_base)){ die("終了（理由：ディレクトリ ".$str_dir_base." が存在しません）\n"); }
+	print("基準ディレクトリ : " . $str_dir_base . "\n");
+	# 出力ファイルが存在するか検査
+	if(-f sub_conv_to_local_charset($str_filepath_html) && -w sub_conv_to_local_charset($str_filepath_html)){
+		print("出力HTMLファイル（既存HTMLに上書き） : " . basename($str_filepath_html) . "\n\n");
 	}
-	if(substr($_,-1) ne '/'){ $_ .= '/'; }	# ディレクトリは / で終わるように修正
-	unless(-d sub_conv_to_local_charset($_)){ die("終了（理由：ディレクトリ ".$_." が存在しません）\n"); }
-	$strBaseDir = $_;
-	print("基準ディレクトリ : " . $strBaseDir . "\n\n");
+	elsif(-f sub_conv_to_local_charset($str_filepath_html)){
+		die("終了（理由：出力HTMLファイル " . basename($str_filepath_html) . " に書き込めません）\n");
+	}
+	else{
+		print("出力HTMLファイル（新規作成） : " . basename($str_filepath_html) . "\n\n");
+	}
 
 	# File::Find::Ruleでの検索深さの入力
-	if(!defined($strImageRelativeDir)){
+	if(!defined($str_dir_image)){
 		print("画像ディレクトリの検索深さの開始値。基準ディレクトリを1とする。\n (1-10) [2]： ");
 		$_ = <STDIN>;
 		chomp();
@@ -661,6 +568,48 @@ sub sub_user_input_init_multidir {
 		print("画像ディレクトリの検索深さ : $nFindMinDepth - $nFindMaxDepth\n\n");
 	}
 
+	sub_user_input_thumbsetting();
+
+	# Exif情報を読み込むか選択
+	print("Exif情報（回転・撮影日時）がある場合読み込みますか (Y/N) [N]：");
+	$_ = <STDIN>;
+	chomp();
+	if(uc($_) eq 'Y'){
+		$flag_ignore_exif = 0;
+		print("Exif情報を読み込みます\n\n");
+	}
+	elsif(uc($_) eq 'N' || length($_)<=0){
+		$flag_ignore_exif = 1;
+		print("Exif情報を読み込みません\n\n");
+	}
+	else{
+		die("終了（Y/Nの選択肢以外が入力された）\n");
+	}
+
+	sub_user_input_htmlstyle();
+
+	# 入力内容の確認
+	print("===========\n主な処理内容の確認\n".
+		" 基準ディレクトリ : ".$str_dir_base."\n".
+		" 出力HTMLファイル : ".basename($str_filepath_html)."\n".
+		" サムネイルディレクトリ : ".$str_dir_thumbnail."\n".
+		" 検索範囲 : ".(defined($str_dir_image)? ($str_dir_image.' 限定') : ('ディレクトリ深さ '.$nFindMinDepth.'-'.$nFindMaxDepth))."\n".
+		" サムネイル長辺px : ".$nLongEdge."\n".
+		" サムネイル上書き : ".($flag_overwrite == 1 ? 'ON' : 'OFF')."\n".
+		"\nこの内容で処理開始しますか ? (Y/N) [N] : ");
+
+	$_ = <STDIN>;
+	chomp();
+	if(uc($_) eq 'Y'){
+		return();
+	}
+	die("終了（キャンセルが選択されたため、処理中止しました）\n");
+}
+
+
+# サムネイル ディレクトリの指定、サイズや上書きの指定 （入力処理の共通関数）
+sub sub_user_input_thumbsetting {
+
 	# サムネイル ディレクトリの入力（無い場合は、新規作成）
 	print("サムネイル ディレクトリ名（例：thumb/）[thumb]： ");
 	$_ = <STDIN>;
@@ -669,7 +618,7 @@ sub sub_user_input_init_multidir {
 	if(substr($_,0,1) eq '/' || substr($_,0,2) eq './'){ die("終了（理由：/ や ./ で始まらない相対ディレクトリを入力してください）\n"); }
 	if(substr($_,-1) ne '/'){ $_ .= '/'; }	# ディレクトリは / で終わるように修正
 	print("サムネイル ディレクトリ（画像ディレクトリ下） : " . $_ . "\n\n");
-	$strThumbRelativeDir = $_;
+	$str_dir_thumbnail = $_;
 
 	# サムネイル画像のサイズを入力する
 	print("サムネイル画像の長辺ピクセル (10-320) [180]： ");
@@ -695,42 +644,65 @@ sub sub_user_input_init_multidir {
 	else{
 		die("終了（Y/Nの選択肢以外が入力された）\n");
 	}
-
-	# 出力HTMLファイル名の入力
-	print("出力HTMLファイル名（例：index.html）： ");
-	$_ = <STDIN>;
-	chomp();
-	if(length($_)<=0){ die("終了（理由：ファイル名が入力されませんでした）\n"); }
-	if($_ =~ /\//){ die("終了（理由：ファイル名に / が入っています）\n"); }
-	if(-f sub_conv_to_local_charset($strBaseDir . $_) && -w sub_conv_to_local_charset($strBaseDir . $_)){
-		print("出力HTMLファイル名（既存HTMLのアップデート） : " . $_ . "\n\n");
-	}
-	elsif(-f sub_conv_to_local_charset($strBaseDir . $_)){
-		die("終了（理由：出力HTMLファイル " . $_ . " に書き込めません）\n");
-	}
-	else{
-		print("出力HTMLファイル名（新規作成） : " . $_ . "\n\n");
-	}
-	$strOutputHTML = $strBaseDir . $_;
-
-	# Exif情報を読み込むか選択
-	print("Exif情報（回転・撮影日時）がある場合読み込みますか (Y/N) [Y]：");
-	$_ = <STDIN>;
-	chomp();
-	if(uc($_) eq 'N'){
-		$flag_ignore_exif = 1;
-		print("Exif情報を読み込みません\n\n");
-	}
-	elsif(uc($_) eq 'N' || length($_)<=0){
-		$flag_ignore_exif = 0;
-		print("Exif情報を読み込みます\n\n");
-	}
-	else{
-		die("終了（Y/Nの選択肢以外が入力された）\n");
-	}
-
 }
 
+# HTMLスタイルの設定 （入力処理の共通関数）
+sub sub_user_input_htmlstyle {
+
+	if($flag_mode eq 'thumb-multidir'){
+		$flag_html_style = 'grid-multidir-style';
+	}
+	else{
+		# 行形式/グリッド形式の選択
+		print("HTMLレイアウトの選択\n 1: 1画像 1行のtable（再読込対応版）\n 2: 画像グリッド（再読込不可）\n (1/2) ? [1] ：");
+		$_ = <STDIN>;
+		chomp();
+		if(length($_)<=0 || $_ eq '1'){ $flag_html_style = 'line-style'; }
+		elsif($_ eq '2'){ $flag_html_style = 'grid-style'; }
+		else{ die("終了（入力範囲は 1/2 です）\n"); }
+		print("HTMLレイアウト : " . $flag_html_style . "\n\n");
+		
+		# comment 3 によるフィルタリング設定
+		print("HTML右端のFカラムの数値による出力制御。指定した数値以上を出力します。0は出力制御を行わない\n 出力制御する場合は、値を入力してください (0,1,2,3...) [0]：");
+		$_ = <STDIN>;
+		chomp();
+		if(uc($_) eq '0' || length($_)<=0){
+			$flag_filter_by_comment3 = 0;
+			print("Fカラムによる出力制御 : OFF\n\n");
+		}
+		elsif(int($_) > 0){
+			$flag_filter_by_comment3 = int($_);
+			print("Fカラムによる出力制御 : ".$flag_filter_by_comment3." 以上を選択して出力\n\n");
+		}
+		else{
+			$flag_filter_by_comment3 = 0;
+			print("Fカラムによる出力制御 : OFF (想定外の入力のため、機能OFFにしました）\n\n");
+		}
+	}
+
+
+	# 背景色の選択
+	print("HTML背景色\n 1: white (\#ffffff)\n 2: black (\#000000)\n 3: light gray (\#f7f7f7)\n 4: ivory (\#f1ecde)\n選択してください (1-4) [1]：");
+	$_ = <STDIN>;
+	chomp;
+	if(length($_)<=0 || uc($_) eq '1'){ $str_html_style_bgcol = "\#ffffff"; $str_html_style_thbgcolor = "\#f8ede2"; }
+	elsif(uc($_) eq '2'){ $str_html_style_bgcol = "\#000000"; $str_html_style_thbgcolor = "\#525252"; }
+	elsif(uc($_) eq '3'){ $str_html_style_bgcol = "\#f7f7f7"; $str_html_style_thbgcolor = "\#dcd2c9"; }
+	elsif(uc($_) eq '4'){ $str_html_style_bgcol = "\#f1ecde"; $str_html_style_thbgcolor = "\#dcd2c9"; }
+	
+	print("HTML背景色 : ".$str_html_style_bgcol."\n\n");
+
+	# フォント色の選択
+	print("HTMLフォント色\n 1: white (\#ffffff)\n 2: black (\#000000)\n 3: dark gray (\#404040)\n 4: brown (\#5a402e)\n選択してください (1-4) [2]：");
+	$_ = <STDIN>;
+	chomp;
+	if(length($_)<=0 || uc($_) eq '2'){ $str_html_style_fontcol = "\#000000"; }
+	elsif(uc($_) eq '1'){ $str_html_style_fontcol = "\#ffffff"; }
+	elsif(uc($_) eq '3'){ $str_html_style_fontcol = "\#404040"; }
+	elsif(uc($_) eq '4'){ $str_html_style_fontcol = "\#5a402e"; }
+	
+	print("HTML背景色 : ".$str_html_style_bgcol."\n\n");
+}
 
 # 対象画像ファイルを配列に格納する
 sub sub_scan_imagefiles {
@@ -743,28 +715,28 @@ sub sub_scan_imagefiles {
 #	$exifTool->Options(DateFormat => "%s", StrictDate=> 1);		# Windows版ActivePerlでは%sはサポート外
 	$exifTool->Options(DateFormat => "%Y,%m,%d,%H,%M,%S", StrictDate=> 1);
 
-	if(defined($strImageRelativeDir)){
+	if(defined($str_dir_image)){
 		my $strScanPattern = '';
 		foreach(@arrFileScanMask){
 			if(length($strScanPattern)>1 && substr($strScanPattern,-1) ne ' '){$strScanPattern .= ' ';}
-			$strScanPattern .= $strBaseDir.$strImageRelativeDir.$_;
+			$strScanPattern .= $str_dir_base.$str_dir_image.$_;
 		}
 		@arrScan = glob(sub_conv_to_local_charset($strScanPattern));
 	}
 	else{
-		@arrScan = File::Find::Rule->file->name(@arrFileScanMask)->maxdepth($nFindMaxDepth)->mindepth($nFindMinDepth)->in(sub_conv_to_local_charset($strBaseDir));
+		@arrScan = File::Find::Rule->file->name(@arrFileScanMask)->maxdepth($nFindMaxDepth)->mindepth($nFindMinDepth)->in(sub_conv_to_local_charset($str_dir_base));
 	}
 
 	foreach(@arrScan)
 	{
 		if(length($_) <= 0){ next; }
 		$_ = sub_conv_to_flagged_utf8($_);
-		if($_ =~ /$strThumbRelativeDir$/ || $_ =~ /$strThumbRelativeDir\/$/){ next; }
+		if($_ =~ /$str_dir_thumbnail$/ || $_ =~ /$str_dir_thumbnail\/$/){ next; }
 		my $strFullPath = $_;
 		my ($basename, $path, $ext) = File::Basename::fileparse($strFullPath, @arrKnownSuffix);
 		$path =~ s|^\.\/||g;	# 先頭の ./ を削除
 		# pathからstrBasenameを除去
-		my $str = $strBaseDir;
+		my $str = $str_dir_base;
 		$str =~ s|^\.\/||g;	# 先頭の ./ を削除
 		$path =~ s/^$str//g;	# パス名から基準ディレクトリを取る
 		# サムネイルファイルに付けるpath文字列を抽出
@@ -803,8 +775,8 @@ sub sub_scan_imagefiles {
 		}
 
 		# サムネイルファイルへの相対パスを作成
-		my $strThumbName = $dirname . '/' . $strThumbRelativeDir . $basename.$ext;
-		if($dirname eq ''){ $strThumbName = $strThumbRelativeDir . $basename.$ext; }
+		my $strThumbName = $dirname . '/' . $str_dir_thumbnail . $basename.$ext;
+		if($dirname eq ''){ $strThumbName = $str_dir_thumbnail . $basename.$ext; }
 
 		if($nMatchLine >= 0 && $flag_read_html == 1){
 			# 全てのデータを移行する場合
@@ -813,7 +785,7 @@ sub sub_scan_imagefiles {
 		elsif($nMatchLine < 0){
 			# 新しいデータを追加する
 			my @arrTemp = ($strFullPath,		# [0]: 画像ファイルへのパス（dir + basename）
-					$dirname,	# [1]: 画像ファイルの相対dir ($strBaseDirと末尾の/を除去済み）
+					$dirname,	# [1]: 画像ファイルの相対dir ($str_dir_baseと末尾の/を除去済み）
 					$basename.$ext,	# [2]: 画像ファイルのbasename
 					$strThumbName,	# [3]: サムネイルの相対パス
 					$tmpDate,	# [4]: unix秒
@@ -870,13 +842,13 @@ sub sub_pick_first_file {
 	my $prevdir = '';		# 一つ前の行のディレクトリを保存（数値リセット用）
 
 	foreach(@arrImageFiles){
-		if(($_->[1].'/') =~ /$strThumbRelativeDir$/ || ($_->[1].'/') =~ /$strThumbRelativeDir\/$/){ next; }
+		if(($_->[1].'/') =~ /$str_dir_thumbnail$/ || ($_->[1].'/') =~ /$str_dir_thumbnail\/$/){ next; }
 
 		if($_->[1] ne $prevdir){ $n = 1; }	# ディレクトリが変われば数値リセット
 		if($n == 1){
 			my $strip_slash_path = $_->[1];
 			$strip_slash_path =~ s|/|\-|g;
-			$_->[3] = $strThumbRelativeDir . $strip_slash_path . '.jpg';
+			$_->[3] = $str_dir_thumbnail . $strip_slash_path . '.jpg';
 			push(@arrFirstImageFiles, $_);
 		}
 		$n++;
@@ -922,7 +894,7 @@ sub sub_make_thumbnail {
 			$strFilenameInput = $_->[0];		# 画像ファイルへのフルパス
 			chomp($strFilenameInput);
 			if(length($strFilenameInput) <= 0){ next; }
-			$strFilenameOutput = $strBaseDir . $_->[3];	# サムネイル画像ファイルへのフルパス
+			$strFilenameOutput = $str_dir_base . $_->[3];	# サムネイル画像ファイルへのフルパス
 			my $exifRotate = $_->[7];		# exif回転情報
 
 			unless(-d sub_conv_to_local_charset(dirname($strFilenameOutput))){
@@ -991,10 +963,10 @@ sub sub_make_thumbnail {
 sub sub_create_html {
 
 
-	print("出力HTMLファイル : " . $strOutputHTML . "\n");
+	print("出力HTMLファイル : " . $str_filepath_html . "\n");
 
 	eval{	
-		open(FH_OUT, '>'.sub_conv_to_local_charset($strOutputHTML)) or die;
+		open(FH_OUT, '>'.sub_conv_to_local_charset($str_filepath_html)) or die;
 		binmode(FH_OUT, ":utf8");
 
 		printf(FH_OUT "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">\n" .
@@ -1003,51 +975,30 @@ sub sub_create_html {
 			"  <meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n" .
 			"  <title></title>\n" .
 			"  <style type=\"text/css\">\n<!--\n" .
+			"  body {\n" .
+			"      background-color:".$str_html_style_bgcol."; color:".$str_html_style_fontcol."; font-size: 10pt;\n" .
+			"  }\n" .
 			"  table {\n" .
-			"      border:1px solid #aaa;" .
-			"      border-collapse:collapse;" .
-			"      font-size: 10pt;" .
-			"      margin: 10px;\n" .
+			"      border:1px solid #aaa; border-collapse:collapse; font-size: 10pt; margin: 10px;\n" .
 			"  }\n" .
 			"  th {\n" .
-			"      font-weight: normal;" .
-			"      background:#f8ede2;" .
-			"      border:1px solid #aaa;" .
-			"      padding: 0.2em 0.4em;\n" .
+			"      font-weight: normal; background:".$str_html_style_thbgcolor."; border:1px solid #aaa; padding: 0.2em 0.4em;\n" .
 			"  }\n" .
 			"  td {\n" .
-			"      border:1px solid #aaa;" .
-			"      padding: 0.2em 0.4em;\n" .
+			"      border:1px solid #aaa; padding: 0.2em 0.4em;\n" .
 			"  }\n" .
 			"  a img {\n" .
-			"      border: 0;" .
-			"      margin: 0;" .
-			"      padding: 0;\n" .
+			"      border: 0; margin: 0; padding: 0;\n" .
 			"  }\n" .
-			"  h3 {".
-			"	font-size: 12pt;".
-			"	font-weight: lighter;".
-			"	text-indent: 5px;".
-			"	letter-spacing: 3px;".
-			"	border-width: 0px 0px 1px 5px;".
-			"	border-style: solid;".
-			"	border-bottom-color: #b87330;".
-			"	border-left-color: #b87330;".
-			"	padding: 2px 5px;".
-			"	margin: 8px 0px 3px;".
-			"	clear: both;".
+			"  h3 {\n".
+			"	font-size: 12pt; font-weight: lighter; text-indent: 5px; letter-spacing: 3px; border-width: 0px 0px 1px 5px;\n" .
+			"	border-style: solid; border-bottom-color: #b87330; border-left-color: #b87330; padding: 2px 5px; margin: 8px 0px 3px; clear: both;\n".
 			"  }\n".
 			"  div.gallerybox {\n".
-			"      display: block;".
-			"      position: relative;".
-			"      float: left;".
-			"      margin: 5px;".
-			"      min-width: 50px;".
-			"      min-height: 50px;".
-			"      font-size: 10pt;\n".
+			"      display: block; position: relative; float: left; margin: 5px; min-width: 50px; min-height: 50px; font-size: 10pt;\n".
 			"  }\n".
 			"  div.g-comment2 {\n".
-			"      line-height: 1.0em;".
+			"      line-height: 1.0em;\n".
 			"  }\n".
 			"-->\n  </style>\n" .
 			"</head>\n" .
@@ -1066,13 +1017,18 @@ sub sub_create_html {
 		if($flag_html_style eq 'line-style') {
 			# 1行1画像形式のとき
 			printf(FH_OUT "<table>\n  <tr><th>dir</th><th>file</th><th>thumbnail</th><th>time</th><th>comment 1</th><th>comment 2</th>" .
-			($flag_use_comment3 == 1 ? "<th>F</th>" : "" ) . "</tr>\n");
+			($flag_html_hide_comment3 == 0 ? "<th>F</th>" : "" ) . "</tr>\n");
 		}
 	
 		my $str_prev_comment1 = '';
 		foreach(@arrImageFiles)
 		{
 			if($flag_nowrite_noexist == 1 && !(-f $_->[0])){ next; }	# 存在しない画像をスキップ
+			# comment 3による出力制御
+			my $str_comment3_num = $_->[8];
+			$str_comment3_num =~ tr/0-9//cd;	# 0-9以外を削除
+			if($flag_filter_by_comment3 != 0 && (length($str_comment3_num)<=0 || int($_->[8])<$flag_filter_by_comment3)){ next; }
+
 			my $strFilenameInput = $_->[1] . '/' . $_->[2];		# 画像への相対パス
 			if($_->[1] eq ''){ $strFilenameInput = $_->[2]; }	# ディレクトリ直下の場合はファイル名のみ
 			my @tm = localtime($_->[4]);
@@ -1080,11 +1036,11 @@ sub sub_create_html {
 			if(length($strFilenameInput) <= 0){ next; }
 			my $strFilenameOutput = $_->[3];	# サムネイル画像への相対パス
 #				$strFilenameOutput =~ s/^\.\///g;	# 先頭の ./ を削除
-			my @arrSize = imgsize(sub_conv_to_local_charset($strBaseDir . $strFilenameOutput));
+			my @arrSize = imgsize(sub_conv_to_local_charset($str_dir_base . $strFilenameOutput));
 			if(!defined($arrSize[0]) || !defined($arrSize[1])){ @arrSize = (0,0); }
 			if($flag_html_style eq 'line-style') {
 				printf(FH_OUT "  <tr><td>%s</td><td>%s</td><td><a href=\"%s\"><img src=\"%s\" alt=\"\" width=\"%d\" height=\"%d\" /></a></td><td>%04d/%02d/%02d %02d:%02d:%02d</td><td>%s</td><td>%s</td>" .
-					($flag_use_comment3 == 1 ? "<td>%s</td>" : "%s" ) . "</tr>\n",
+					($flag_html_hide_comment3 == 0 ? "<td>%s</td>" : "%s" ) . "</tr>\n",
 					dirname($strFilenameInput),
 					basename($strFilenameInput, @arrKnownSuffix),
 					$strFilenameInput,	# [0]: 画像へのパス
@@ -1093,7 +1049,7 @@ sub sub_create_html {
 					$tm[5]+1900, $tm[4]+1, $tm[3], $tm[2], $tm[1], $tm[0],	# [4] : unix秒
 					$_->[5],	# [5]: comment 1
 					$_->[6],	# [6]: comment 2
-					($flag_use_comment3 == 1 ? $_->[8] : ''));	# [8]: comment 3
+					($flag_html_hide_comment3 == 0 ? $_->[8] : ''));	# [8]: comment 3
 			}
 			elsif($flag_html_style eq 'grid-style') {
 				if($flag_sort_order eq 'c1-c2-date'){
@@ -1162,7 +1118,7 @@ sub sub_make_backupfile {
 	for(my $i=0; $i<1000; $i++){
 		my $strBackupFile = sprintf("%s\.%03d",$strTargetFile,$i);
 		if(-e sub_conv_to_local_charset($strBackupFile)){ next; }
-		File::Copy::copy(sub_conv_to_local_charset($strOutputHTML), sub_conv_to_local_charset($strBackupFile)) or next;
+		File::Copy::copy(sub_conv_to_local_charset($str_filepath_html), sub_conv_to_local_charset($strBackupFile)) or next;
 		print("バックアップファイル ".$strBackupFile." を作成しました\n");
 		last;
 	}
@@ -1183,13 +1139,13 @@ sub sub_parse_html {
 
 	my $enc = undef;
 	if($flag_read_encode ne ''){ $enc = $flag_read_encode; }
-	else{ $enc = sub_get_encode_of_file($strOutputHTML); }
+	else{ $enc = sub_get_encode_of_file($str_filepath_html); }
 	if($enc eq ''){
 		print("入力ファイルのエンコードが正しく判定できませんでした。$flag_charcode で読み込みます\n");
 		$enc = $flag_charcode;
 	}
 
-	pQuery(sub_conv_to_local_charset($strOutputHTML))->find("tr")->each( sub{
+	pQuery(sub_conv_to_local_charset($str_filepath_html))->find("tr")->each( sub{
 		@arrCsvRaw = ();
 		$flag_indata = 0;
 		pQuery($_)->find("td")->each( sub{
@@ -1333,10 +1289,13 @@ sub sub_parse_html_datastore {
 		$arrTemp[6] =~ s/<br>/<br \/>/g;		# <br>→<br />
 		$arrTemp[8] =~ s/<br>/<br \/>/g;		# <br>→<br />
 
+		if($arrTemp[1] eq '.'){ $arrTemp[1] = ''; }		# 画像ディレクトリ ./ は空欄にする
+		$arrTemp[1] =~ s|^\.\/||g;	# 画像ディレクトリ先頭の ./ を削除
+
 		# 画像ファイルがhtmlからの相対パスの場合、アクセス可能な"フルパス"に直す
-		unless($arrTemp[0] =~ m/^$strBaseDir/){
+		unless($arrTemp[0] =~ m/^$str_dir_base/){
 			$arrTemp[0] =~ s|^\./||;	# 先頭が ./ の場合除去する
-			$arrTemp[0] = $strBaseDir . $arrTemp[0];
+			$arrTemp[0] = $str_dir_base . $arrTemp[0];
 		}
 
 		push(@arrImageFiles, \@arrTemp);
@@ -1348,7 +1307,7 @@ sub sub_parse_html_datastore {
 
 # CSVファイルに書きこむ
 sub sub_write_csv {
-	open(FH_OUT, ">$strOutputCSV") or die("CSVファイルに書き込めません\n");
+	open(FH_OUT, ">$str_filepath_csv") or die("CSVファイルに書き込めません\n");
 	binmode(FH_OUT, ":utf8");
 	foreach(@arrCsv){
 		print(FH_OUT $_."\n");
@@ -1368,13 +1327,13 @@ sub sub_read_from_csv {
 	# CSVファイルのエンコードを検出する
 	my $enc = undef;
 	if($flag_read_encode ne ''){ $enc = $flag_read_encode; }
-	else{ $enc = sub_get_encode_of_file($strBaseDir.$strInputCSV); }
+	else{ $enc = sub_get_encode_of_file($str_filepath_csv); }
 	if($enc eq ''){
 		print("入力ファイルのエンコードが正しく判定できませんでした。$flag_charcode で読み込みます\n");
 		$enc = $flag_charcode;
 	}
 
-	open(FH_IN, "<".$strBaseDir.$strInputCSV) or die("ファイル $strInputCSV を読み込めません");
+	open(FH_IN, "<".$str_filepath_csv) or die("ファイル ".basename($str_filepath_csv)." を読み込めません");
 	my $nTargetFiles = 0;
 	while(<FH_IN>)
 	{
@@ -1398,11 +1357,13 @@ sub sub_read_from_csv {
 		$arrTemp[6] =~ s/<br>/<br \/>/g;		# <br>→<br />
 		$arrTemp[8] =~ s/<br>/<br \/>/g;		# <br>→<br />
 
+		if($arrTemp[1] eq '.'){ $arrTemp[1] = ''; }		# 画像ディレクトリ ./ は空欄にする
+		$arrTemp[1] =~ s|^\.\/||g;	# 画像ディレクトリ先頭の ./ を削除
 
 		# 画像ファイルがhtmlからの相対パスの場合、アクセス可能な"フルパス"に直す
-		unless($arrTemp[0] =~ m/^$strBaseDir/){
+		unless($arrTemp[0] =~ m/^$str_dir_base/){
 			$arrTemp[0] =~ s|^\./||;	# 先頭が ./ の場合除去する
-			$arrTemp[0] = $strBaseDir . $arrTemp[0];
+			$arrTemp[0] = $str_dir_base . $arrTemp[0];
 		}
 
 		# 画像自体と、コメント以外は再構築するモードの時
@@ -1431,14 +1392,14 @@ sub sub_read_from_csv {
 			# サムネイルファイルのパスを再構築する
 			my ($basename, $path, $ext) = File::Basename::fileparse($arrTemp[0], @arrKnownSuffix);
 			$arrTemp[3] = $arrTemp[1] . '/' 
-					. $strThumbRelativeDir . $basename.$ext;	# [3]: サムネイルの相対パス
-			if($arrTemp[1] eq ''){ $arrTemp[3] = $strThumbRelativeDir . $basename.$ext; }
+					. $str_dir_thumbnail . $basename.$ext;	# [3]: サムネイルの相対パス
+			if($arrTemp[1] eq ''){ $arrTemp[3] = $str_dir_thumbnail . $basename.$ext; }
 		}
 
 		push(@arrImageFiles, \@arrTemp);
 		$nTargetFiles++;
 	}
-	close(FH_IN) or die("ファイル ".$strInputCSV." を close 出来ませんでした");
+	close(FH_IN) or die("ファイル ".basename($str_filepath_csv)." を close 出来ませんでした");
 
 }
 
