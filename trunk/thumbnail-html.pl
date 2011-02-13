@@ -232,14 +232,14 @@ sub sub_user_input_init {
 		print("画像ディレクトリの検索深さの開始値。基準ディレクトリを1とする。\n (1-10) [2]： ");
 		$_ = <STDIN>;
 		chomp();
-		if(length($_)<=0){ $_ = 2; }
+		$_ =~ tr/0-9//cd; if($_ eq ''){ $_ = '2'; }	# [0-9]以外の文字を除去。数値なしの時はデフォルト値
 		if(int($_)<1 || int($_)>10){ die("終了（入力範囲は 1 - 10 です）\n"); }
 		$nFindMinDepth = int($_);
 
 		print("画像ディレクトリの検索深さの終了値。基準ディレクトリを1とする。\n ($nFindMinDepth-10) [$nFindMinDepth] ： ");
 		$_ = <STDIN>;
 		chomp();
-		if(length($_)<=0){ $_ = $nFindMinDepth; }
+		$_ =~ tr/0-9//cd; if($_ eq ''){ $_ = $nFindMinDepth; }	# [0-9]以外の文字を除去。数値なしの時はデフォルト値
 		if(int($_)<$nFindMinDepth || int($_)>10){ die("終了（入力範囲は $nFindMinDepth - 10 です）\n"); }
 		$nFindMaxDepth = int($_);
 	
@@ -302,7 +302,7 @@ sub sub_user_input_init {
 		"5: Comment1-Comment2-タイムスタンプ\n(1-5) ?  [3]：");
 	$_ = <STDIN>;
 	chomp();
-	if(length($_)<=0){ $_ = 1; }
+	$_ =~ tr/0-9//cd; if($_ eq ''){ $_ = '3'; }	# [0-9]以外の文字を除去。数値なしの時はデフォルト値
 	if(int($_)<1 || int($_)>5){ die("終了（入力範囲は 1 - 5 です）\n"); }
 	switch(int($_)){
 		case 1	{ $flag_sort_order='file-name'; }
@@ -554,14 +554,14 @@ sub sub_user_input_init_multidir {
 		print("画像ディレクトリの検索深さの開始値。基準ディレクトリを1とする。\n (1-10) [2]： ");
 		$_ = <STDIN>;
 		chomp();
-		if(length($_)<=0){ $_ = 2; }
+		$_ =~ tr/0-9//cd; if($_ eq ''){ $_ = '2'; }	# [0-9]以外の文字を除去。数値なしの時はデフォルト値
 		if(int($_)<1 || int($_)>10){ die("終了（入力範囲は 1 - 10 です）\n"); }
 		$nFindMinDepth = int($_);
 
 		print("画像ディレクトリの検索深さの終了値。基準ディレクトリを1とする。\n ($nFindMinDepth-10) [$nFindMinDepth] ： ");
 		$_ = <STDIN>;
 		chomp();
-		if(length($_)<=0){ $_ = $nFindMinDepth; }
+		$_ =~ tr/0-9//cd; if($_ eq ''){ $_ = $nFindMinDepth; }	# [0-9]以外の文字を除去。数値なしの時はデフォルト値
 		if(int($_)<$nFindMinDepth || int($_)>10){ die("終了（入力範囲は $nFindMinDepth - 10 です）\n"); }
 		$nFindMaxDepth = int($_);
 	
@@ -624,7 +624,7 @@ sub sub_user_input_thumbsetting {
 	print("サムネイル画像の長辺ピクセル (10-320) [180]： ");
 	$_ = <STDIN>;
 	chomp();
-	if(length($_)<=0){ $_ = 180; }
+	$_ =~ tr/0-9//cd; if($_ eq ''){ $_ = '180'; }	# [0-9]以外の文字を除去。数値なしの時はデフォルト値
 	if(int($_)<10 || int($_)>320){ die("終了（入力範囲は 10 - 320 です）\n"); }
 	$nLongEdge = int($_);
 	print("サムネイルの長辺（px） : " . $nLongEdge . "\n\n");
@@ -666,7 +666,8 @@ sub sub_user_input_htmlstyle {
 		print("HTML右端のFカラムの数値による出力制御。指定した数値以上を出力します。0は出力制御を行わない\n 出力制御する場合は、値を入力してください (0,1,2,3...) [0]：");
 		$_ = <STDIN>;
 		chomp();
-		if(uc($_) eq '0' || length($_)<=0){
+		$_ =~ tr/0-9//cd; if($_ eq ''){ $_ = '0'; }	# [0-9]以外の文字を除去。数値なしの時はデフォルト値
+		if(int($_) == 0){
 			$flag_filter_by_comment3 = 0;
 			print("Fカラムによる出力制御 : OFF\n\n");
 		}
