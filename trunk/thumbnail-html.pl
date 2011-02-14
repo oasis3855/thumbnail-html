@@ -90,6 +90,7 @@ my $flag_verbose = 0;		# 詳細表示するフラグ
 my $flag_sort_order = 'file-name';	# ソート順
 my $flag_copy_prev = 1;		#「 空白時、前行値のコピーを行う」スイッチ (0:Off, 1:Comment1, 2:Comment1+2)
 my $flag_html_style = 'line-style';	# line-style:1行1画像table, grid-style:画像をグリッド表示
+my $flag_html_gridstyle_comment = 'date-comment';	# grid-style時のコメント表示種類 date-comment / filename
 my $flag_conv_time = 1;		# csv変換時に「日時をunix秒に変換する」スイッチ
 my $flag_nowrite_noexist = 1;	# html作成時に、存在しないファイルは書き出さない（html更新、csvから変換時用）
 my $flag_ignore_exif = 0;	# exif情報を読み込まない
@@ -662,6 +663,16 @@ sub sub_user_input_htmlstyle {
 		else{ die("終了（入力範囲は 1/2 です）\n"); }
 		print("HTMLレイアウト : " . $flag_html_style . "\n\n");
 		
+		if($flag_html_style eq 'grid-style'){
+			print("画像下に表示する情報の選択\n 1: 日時 + コメント\n 2: ファイル名 + コメント\n (1/2) ? [1] ：");
+			$_ = <STDIN>;
+			chomp();
+			if(length($_)<=0 || $_ eq '1'){ $flag_html_gridstyle_comment = 'date-c1-c2'; }
+			elsif($_ eq '2'){ $flag_html_gridstyle_comment = 'basename-c1-c2'; }
+			else{ die("終了（入力範囲は 1/2 です）\n"); }
+			print("表示する情報 : " . $flag_html_gridstyle_comment . "\n\n");
+		}
+		
 		# comment 3 によるフィルタリング設定
 		print("HTML右端のFカラムの数値による出力制御。指定した数値以上を出力します。0は出力制御を行わない\n 出力制御する場合は、値を入力してください (0,1,2,3...) [0]：");
 		$_ = <STDIN>;
@@ -1053,7 +1064,7 @@ sub sub_create_html {
 					($flag_html_hide_comment3 == 0 ? $_->[8] : ''));	# [8]: comment 3
 			}
 			elsif($flag_html_style eq 'grid-style') {
-				if($flag_sort_order eq 'c1-c2-date'){
+				if($flag_sort_order eq 'c1-c2-date'){		# comment1でセh3クションを区切るグリッドスタイル
 					if($_->[5] ne $str_prev_comment1){
 						my $str_comment = $_->[5];
 						$str_comment =~ s#(<br>|<br />)##ig;
@@ -1070,16 +1081,29 @@ sub sub_create_html {
 						$arrSize[0], $arrSize[1],
 						$str_comment);
 				}
-				else{
-					printf(FH_OUT "<div class=\"gallerybox\" style=\"width:%dpx; height:%dpx;\"><div class=\"g-photo\"><a href=\"%s\"><img src=\"%s\" alt=\"\" width=\"%d\" height=\"%d\" /></a></div><div class=\"g-date\">%04d/%02d/%02d %02d:%02d:%02d</div><div class=\"g-comment1\">%s</div><div class=\"g-comment2\">%s</div></div>\n",
-						$arrSize[0] > $arrSize[1] ? $arrSize[0]+10 : $arrSize[1]+10,
-						$arrSize[0] > $arrSize[1] ? $arrSize[0]+40 : $arrSize[1]+40,
-						$strFilenameInput,
-						$strFilenameOutput,
-						$arrSize[0], $arrSize[1],
-						$tm[5]+1900, $tm[4]+1, $tm[3], $tm[2], $tm[1], $tm[0],	# [4] : unix秒
-						$_->[5],	# [5]: comment 1
-						$_->[6]);	# [6]: comment 2
+				else{		# 単純なグリッドスタイル（h3セクションによる区切り無し）
+					if($flag_html_gridstyle_comment eq 'date-c1-c2'){
+						printf(FH_OUT "<div class=\"gallerybox\" style=\"width:%dpx; height:%dpx;\"><div class=\"g-photo\"><a href=\"%s\"><img src=\"%s\" alt=\"\" width=\"%d\" height=\"%d\" /></a></div><div class=\"g-date\">%04d/%02d/%02d %02d:%02d:%02d</div><div class=\"g-comment1\">%s</div><div class=\"g-comment2\">%s</div></div>\n",
+							$arrSize[0] > $arrSize[1] ? $arrSize[0]+10 : $arrSize[1]+10,
+							$arrSize[0] > $arrSize[1] ? $arrSize[0]+40 : $arrSize[1]+40,
+							$strFilenameInput,
+							$strFilenameOutput,
+							$arrSize[0], $arrSize[1],
+							$tm[5]+1900, $tm[4]+1, $tm[3], $tm[2], $tm[1], $tm[0],	# [4] : unix秒
+							$_->[5],	# [5]: comment 1
+							$_->[6]);	# [6]: comment 2
+					}
+					elsif($flag_html_gridstyle_comment eq 'basename-c1-c2'){
+						printf(FH_OUT "<div class=\"gallerybox\" style=\"width:%dpx; height:%dpx;\"><div class=\"g-photo\"><a href=\"%s\"><img src=\"%s\" alt=\"\" width=\"%d\" height=\"%d\" /></a></div><div class=\"g-filename\">%s</div><div class=\"g-comment1\">%s</div><div class=\"g-comment2\">%s</div></div>\n",
+							$arrSize[0] > $arrSize[1] ? $arrSize[0]+10 : $arrSize[1]+10,
+							$arrSize[0] > $arrSize[1] ? $arrSize[0]+40 : $arrSize[1]+40,
+							$strFilenameInput,
+							$strFilenameOutput,
+							$arrSize[0], $arrSize[1],
+							$_->[2],	# [2] : 画像ファイルのbasename
+							$_->[5],	# [5]: comment 1
+							$_->[6]);	# [6]: comment 2
+					}
 				}
 			}
 			elsif($flag_html_style eq 'grid-multidir-style') {
