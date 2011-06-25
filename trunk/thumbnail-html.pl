@@ -141,6 +141,7 @@ elsif($flag_mode eq 'html2csv'){
 elsif($flag_mode eq 'csv2html'){
 	sub_user_input_init_csv2html();
 	sub_read_from_csv();
+	sub_sort_imagefiles();
 	sub_make_thumbnail();
 	# 出力ファイルが上書きになる場合、バックアップファイルを作成する
 	if(-e sub_conv_to_local_charset($str_filepath_html)){ sub_make_backupfile($str_filepath_html); }
@@ -228,23 +229,8 @@ sub sub_user_input_init {
 		print("画像ディレクトリの限定（基準ディレクトリからの相対） : " . $str_dir_image . "\n\n");
 	}
 
-	# File::Find::Ruleでの検索深さの入力
 	if(!defined($str_dir_image)){
-		print("画像ディレクトリの検索深さの開始値。基準ディレクトリを1とする。\n (1-10) [2]： ");
-		$_ = <STDIN>;
-		chomp();
-		$_ =~ tr/0-9//cd; if($_ eq ''){ $_ = '2'; }	# [0-9]以外の文字を除去。数値なしの時はデフォルト値
-		if(int($_)<1 || int($_)>10){ die("終了（入力範囲は 1 - 10 です）\n"); }
-		$nFindMinDepth = int($_);
-
-		print("画像ディレクトリの検索深さの終了値。基準ディレクトリを1とする。\n ($nFindMinDepth-10) [$nFindMinDepth] ： ");
-		$_ = <STDIN>;
-		chomp();
-		$_ =~ tr/0-9//cd; if($_ eq ''){ $_ = $nFindMinDepth; }	# [0-9]以外の文字を除去。数値なしの時はデフォルト値
-		if(int($_)<$nFindMinDepth || int($_)>10){ die("終了（入力範囲は $nFindMinDepth - 10 です）\n"); }
-		$nFindMaxDepth = int($_);
-	
-		print("画像ディレクトリの検索深さ : $nFindMinDepth - $nFindMaxDepth\n\n");
+		sub_user_input_image_searchdepth();
 	}
 
 	sub_user_input_thumbsetting();
@@ -265,72 +251,16 @@ sub sub_user_input_init {
 		if($flag_read_html == 2){ print("既存HTMLの読み込み : ON（画像とコメントのみ読み込む）\n\n"); }
 	}
 
-	# コメント欄が空白の場合、前行のデータで保管するかの選択
+	# コメント欄が空白の場合、前行のデータで補完するかの選択
 	if($flag_read_html != 0) {
-		printf("既存HTML読み込み時、空白項目は前行の値をコピーしますか？\n1:Comment1（日時の右隣）のみ対象\n2:Comment1 & Comment2（コメント欄2つ全て）対象\nN:コピーしない（空白の場合も元のまま）\n選択してください (1/2/N) [N] : ");
-		$_ = <STDIN>;
-		chomp;
-		if(length($_)<=0){  $flag_copy_prev = 0; }
-		elsif(uc($_) eq '1'){ $flag_copy_prev = 1; }
-		elsif(uc($_) eq '2'){ $flag_copy_prev = 2; }
-		elsif(uc($_) eq 'N'){ $flag_copy_prev = 0; }
-		else { die("選択肢 1/2/N 以外が入力されたため終了します") }
-
-		if($flag_copy_prev == 0){ print("空白項目は放置します（コピー機能無し）\n\n"); }
-		if($flag_copy_prev == 1){ print("Comment 1が空白の場合、前行をコピーします\n\n"); }
-		if($flag_copy_prev == 2){ print("Comment 1,2が空白の場合、前行をコピーします\n\n"); }
+		sub_user_input_blankcomment_copyprev();
 	}
 
-	# 読み込むHTMLファイルのエンコード形式の強制指定
-	if($flag_read_html != 0) {
-		printf("ファイル読み込み時の文字コードの強制指定をしますか\n 0:自動判定（強制指定しない）\n 1:UTF-8\n 2:Shift JIS (cp932)\n 3:iso-2022-jp (JIS)\n 4:EUC-JP\n 5:UTF-16\n 6:UTF-32\n 選択してください (0-6) [0] : ");
-		$_ = <STDIN>;
-		chomp;
-		if(length($_)<=0 || $_ eq '0'){  $flag_read_encode = ''; }
-		elsif($_ eq '1'){ $flag_read_encode = 'utf8'; }
-		elsif($_ eq '2'){ $flag_read_encode = 'shiftjis'; }
-		elsif($_ eq '3'){ $flag_read_encode = 'iso-2022-jp'; }
-		elsif($_ eq '4'){ $flag_read_encode = 'euc-jp'; }
-		elsif($_ eq '5'){ $flag_read_encode = 'utf16'; }
-		elsif($_ eq '6'){ $flag_read_encode = 'utf32'; }
-		else{ die("0-6 以外が入力されました\n"); }
+	sub_user_input_readencode();
 
-		print("文字コードの強制指定 : ". ($flag_read_encode eq '' ? 'OFF' : $flag_read_encode) . "\n\n");
-	}
+	sub_user_input_sortsetting();
 
-	# ソート順の選択
-	print("ソート順を選択\n1: ファイル順（A...Z）\n2: ファイル順（Z...A）\n3: Exif/タイムスタンプ順（過去->未来）\n4: Exif/タイムスタンプ順（未来->過去）\n".
-		"5: Comment1-Comment2-タイムスタンプ\n(1-5) ?  [3]：");
-	$_ = <STDIN>;
-	chomp();
-	$_ =~ tr/0-9//cd; if($_ eq ''){ $_ = '3'; }	# [0-9]以外の文字を除去。数値なしの時はデフォルト値
-	if(int($_)<1 || int($_)>5){ die("終了（入力範囲は 1 - 5 です）\n"); }
-	switch(int($_)){
-		case 1	{ $flag_sort_order='file-name'; }
-		case 2	{ $flag_sort_order='file-name-reverse'; }
-		case 3	{ $flag_sort_order='file-date'; }
-		case 4	{ $flag_sort_order='file-date-reverse'; }
-		case 5	{ $flag_sort_order='c1-c2-date'; }
-		else	{ $flag_sort_order='file-name'; }
-	}
-	print("ソート順 : " . $flag_sort_order . "\n\n");
-
-	# Exif情報を読み込むか選択
-	print("Exif情報（回転・撮影日時）がある場合読み込みますか (Y/N) [Y]：");
-	$_ = <STDIN>;
-	chomp();
-	if(uc($_) eq 'N'){
-		$flag_ignore_exif = 1;
-		print("Exif情報を読み込みません\n\n");
-	}
-	elsif(uc($_) eq 'N' || length($_)<=0){
-		$flag_ignore_exif = 0;
-		print("Exif情報を読み込みます\n\n");
-	}
-	else{
-		die("終了（Y/Nの選択肢以外が入力された）\n");
-	}
-
+	sub_user_input_ignore_exifdate();
 
 	sub_user_input_htmlstyle();
 
@@ -408,19 +338,7 @@ sub sub_user_input_init_html2csv {
 	elsif(uc($_) eq 'N'){ $flag_conv_time = 0; }
 	else { die("選択肢 Y/N 以外が入力されたため終了します") }
 
-	# コメント欄が空白の場合、前行のデータで保管するかの選択
-	printf("既存HTML読み込み時、空白項目は前行の値をコピーしますか？\n1:Comment1（日時の右隣）のみ対象\n2:Comment1 & Comment2（コメント欄2つ全て）対象\nN:コピーしない（空白の場合も元のまま）\n選択してください (1/2/N) [N] : ");
-	$_ = <STDIN>;
-	chomp;
-	if(length($_)<=0){  $flag_copy_prev = 0; }
-	elsif(uc($_) eq '1'){ $flag_copy_prev = 1; }
-	elsif(uc($_) eq '2'){ $flag_copy_prev = 2; }
-	elsif(uc($_) eq 'N'){ $flag_copy_prev = 0; }
-	else { die("選択肢 1/2/N 以外が入力されたため終了します") }
-
-	if($flag_copy_prev == 0){ print("空白項目は放置します（コピー機能無し）\n\n"); }
-	if($flag_copy_prev == 1){ print("Comment 1が空白の場合、前行をコピーします\n\n"); }
-	if($flag_copy_prev == 2){ print("Comment 1,2が空白の場合、前行をコピーします\n\n"); }
+	sub_user_input_blankcomment_copyprev();
 
 
 	# 入力内容の確認
@@ -497,6 +415,12 @@ sub sub_user_input_init_csv2html {
 
 	sub_user_input_thumbsetting();
 
+	sub_user_input_readencode();
+
+	sub_user_input_sortsetting();
+
+#	sub_user_input_ignore_exifdate();
+
 	sub_user_input_htmlstyle();
 
 	# 入力内容の確認
@@ -552,40 +476,12 @@ sub sub_user_input_init_multidir {
 
 	# File::Find::Ruleでの検索深さの入力
 	if(!defined($str_dir_image)){
-		print("画像ディレクトリの検索深さの開始値。基準ディレクトリを1とする。\n (1-10) [2]： ");
-		$_ = <STDIN>;
-		chomp();
-		$_ =~ tr/0-9//cd; if($_ eq ''){ $_ = '2'; }	# [0-9]以外の文字を除去。数値なしの時はデフォルト値
-		if(int($_)<1 || int($_)>10){ die("終了（入力範囲は 1 - 10 です）\n"); }
-		$nFindMinDepth = int($_);
-
-		print("画像ディレクトリの検索深さの終了値。基準ディレクトリを1とする。\n ($nFindMinDepth-10) [$nFindMinDepth] ： ");
-		$_ = <STDIN>;
-		chomp();
-		$_ =~ tr/0-9//cd; if($_ eq ''){ $_ = $nFindMinDepth; }	# [0-9]以外の文字を除去。数値なしの時はデフォルト値
-		if(int($_)<$nFindMinDepth || int($_)>10){ die("終了（入力範囲は $nFindMinDepth - 10 です）\n"); }
-		$nFindMaxDepth = int($_);
-	
-		print("画像ディレクトリの検索深さ : $nFindMinDepth - $nFindMaxDepth\n\n");
+		sub_user_input_image_searchdepth();
 	}
 
 	sub_user_input_thumbsetting();
 
-	# Exif情報を読み込むか選択
-	print("Exif情報（回転・撮影日時）がある場合読み込みますか (Y/N) [N]：");
-	$_ = <STDIN>;
-	chomp();
-	if(uc($_) eq 'Y'){
-		$flag_ignore_exif = 0;
-		print("Exif情報を読み込みます\n\n");
-	}
-	elsif(uc($_) eq 'N' || length($_)<=0){
-		$flag_ignore_exif = 1;
-		print("Exif情報を読み込みません\n\n");
-	}
-	else{
-		die("終了（Y/Nの選択肢以外が入力された）\n");
-	}
+	sub_user_input_ignore_exifdate();
 
 	sub_user_input_htmlstyle();
 
@@ -605,6 +501,27 @@ sub sub_user_input_init_multidir {
 		return();
 	}
 	die("終了（キャンセルが選択されたため、処理中止しました）\n");
+}
+
+
+# 画像ファイル検索深さ（ディレクトリ深さ）の指定 （入力処理の共通関数）
+sub sub_user_input_image_searchdepth {
+	# File::Find::Ruleでの検索深さの入力
+	print("画像ディレクトリの検索深さの開始値。基準ディレクトリを1とする。\n (1-10) [2]： ");
+	$_ = <STDIN>;
+	chomp();
+	$_ =~ tr/0-9//cd; if($_ eq ''){ $_ = '2'; }	# [0-9]以外の文字を除去。数値なしの時はデフォルト値
+	if(int($_)<1 || int($_)>10){ die("終了（入力範囲は 1 - 10 です）\n"); }
+	$nFindMinDepth = int($_);
+
+	print("画像ディレクトリの検索深さの終了値。基準ディレクトリを1とする。\n ($nFindMinDepth-10) [$nFindMinDepth] ： ");
+	$_ = <STDIN>;
+	chomp();
+	$_ =~ tr/0-9//cd; if($_ eq ''){ $_ = $nFindMinDepth; }	# [0-9]以外の文字を除去。数値なしの時はデフォルト値
+	if(int($_)<$nFindMinDepth || int($_)>10){ die("終了（入力範囲は $nFindMinDepth - 10 です）\n"); }
+	$nFindMaxDepth = int($_);
+
+	print("画像ディレクトリの検索深さ : $nFindMinDepth - $nFindMaxDepth\n\n");
 }
 
 
@@ -664,12 +581,13 @@ sub sub_user_input_htmlstyle {
 		print("HTMLレイアウト : " . $flag_html_style . "\n\n");
 		
 		if($flag_html_style eq 'grid-style'){
-			print("画像下に表示する情報の選択\n 1: 日時 + コメント\n 2: ファイル名 + コメント\n (1/2) ? [1] ：");
+			print("画像下に表示する情報の選択\n 1: 画像下「日時 + コメント1+2」\n 2: 画像下「ファイル名 + コメント1+2」\n 3: 画像下「コメント2」ツールチップ「日時 + コメント1」\n (1-3) ? [1] ：");
 			$_ = <STDIN>;
 			chomp();
 			if(length($_)<=0 || $_ eq '1'){ $flag_html_gridstyle_comment = 'date-c1-c2'; }
 			elsif($_ eq '2'){ $flag_html_gridstyle_comment = 'basename-c1-c2'; }
-			else{ die("終了（入力範囲は 1/2 です）\n"); }
+			elsif($_ eq '3'){ $flag_html_gridstyle_comment = 'c2'; }
+			else{ die("終了（入力範囲は 1-3 です）\n"); }
 			print("表示する情報 : " . $flag_html_gridstyle_comment . "\n\n");
 		}
 		
@@ -714,6 +632,86 @@ sub sub_user_input_htmlstyle {
 	elsif(uc($_) eq '4'){ $str_html_style_fontcol = "\#5a402e"; }
 	
 	print("HTML背景色 : ".$str_html_style_bgcol."\n\n");
+}
+
+
+# 画像ソート設定 （入力処理の共通関数）
+sub sub_user_input_sortsetting {
+	# ソート順の選択
+	print("ソート順を選択\n1: ファイル順（A...Z）\n2: ファイル順（Z...A）\n3: Exif/タイムスタンプ順（過去->未来）\n4: Exif/タイムスタンプ順（未来->過去）\n".
+		"5: Comment1-Comment2-タイムスタンプ\n6: Comment1-タイムスタンプ\n(1-6) ?  [3]：");
+	$_ = <STDIN>;
+	chomp();
+	$_ =~ tr/0-9//cd; if($_ eq ''){ $_ = '3'; }	# [0-9]以外の文字を除去。数値なしの時はデフォルト値
+	if(int($_)<1 || int($_)>6){ die("終了（入力範囲は 1 - 6 です）\n"); }
+	switch(int($_)){
+		case 1	{ $flag_sort_order='file-name'; }
+		case 2	{ $flag_sort_order='file-name-reverse'; }
+		case 3	{ $flag_sort_order='file-date'; }
+		case 4	{ $flag_sort_order='file-date-reverse'; }
+		case 5	{ $flag_sort_order='c1-c2-date'; }
+		case 6	{ $flag_sort_order='c1-date'; }
+		else	{ $flag_sort_order='file-name'; }
+	}
+	print("ソート順 : " . $flag_sort_order . "\n\n");
+}
+
+
+# comment1/comment2が空欄の時 前行をコピーする設定 （入力処理の共通関数）
+sub sub_user_input_blankcomment_copyprev {
+	# コメント欄が空白の場合、前行のデータで補完するかの選択
+	printf("既存HTML読み込み時、空白項目は前行の値をコピーしますか？\n1:Comment1（日時の右隣）のみ対象\n2:Comment1 & Comment2（コメント欄2つ全て）対象\nN:コピーしない（空白の場合も元のまま）\n選択してください (1/2/N) [N] : ");
+	$_ = <STDIN>;
+	chomp;
+	if(length($_)<=0){  $flag_copy_prev = 0; }
+	elsif(uc($_) eq '1'){ $flag_copy_prev = 1; }
+	elsif(uc($_) eq '2'){ $flag_copy_prev = 2; }
+	elsif(uc($_) eq 'N'){ $flag_copy_prev = 0; }
+	else { die("選択肢 1/2/N 以外が入力されたため終了します") }
+
+	if($flag_copy_prev == 0){ print("空白項目は放置します（コピー機能無し）\n\n"); }
+	if($flag_copy_prev == 1){ print("Comment 1が空白の場合、前行をコピーします\n\n"); }
+	if($flag_copy_prev == 2){ print("Comment 1,2が空白の場合、前行をコピーします\n\n"); }
+}
+
+# HTML/CSVファイル読み込み時のエンコード設定 （入力処理の共通関数）
+sub sub_user_input_readencode {
+	# 読み込むHTMLファイルのエンコード形式の強制指定
+	if($flag_read_html != 0) {
+		printf("ファイル読み込み時の文字コードの強制指定をしますか\n 0:自動判定（強制指定しない）\n 1:UTF-8\n 2:Shift JIS (cp932)\n 3:iso-2022-jp (JIS)\n 4:EUC-JP\n 5:UTF-16\n 6:UTF-32\n 選択してください (0-6) [0] : ");
+		$_ = <STDIN>;
+		chomp;
+		if(length($_)<=0 || $_ eq '0'){  $flag_read_encode = ''; }
+		elsif($_ eq '1'){ $flag_read_encode = 'utf8'; }
+		elsif($_ eq '2'){ $flag_read_encode = 'shiftjis'; }
+		elsif($_ eq '3'){ $flag_read_encode = 'iso-2022-jp'; }
+		elsif($_ eq '4'){ $flag_read_encode = 'euc-jp'; }
+		elsif($_ eq '5'){ $flag_read_encode = 'utf16'; }
+		elsif($_ eq '6'){ $flag_read_encode = 'utf32'; }
+		else{ die("0-6 以外が入力されました\n"); }
+
+		print("文字コードの強制指定 : ". ($flag_read_encode eq '' ? 'OFF' : $flag_read_encode) . "\n\n");
+	}
+}
+
+
+# exif日時を無視してファイルの最終変更日を使うかの設定 （入力処理の共通関数）
+sub sub_user_input_ignore_exifdate {
+	# Exif情報を読み込むか選択
+	print("Exif情報（回転・撮影日時）がある場合読み込みますか (Y/N) [Y]：");
+	$_ = <STDIN>;
+	chomp();
+	if(uc($_) eq 'Y' || length($_)<=0){
+		$flag_ignore_exif = 0;
+		print("Exif情報を読み込みます\n\n");
+	}
+	elsif(uc($_) eq 'N'){
+		$flag_ignore_exif = 1;
+		print("Exif情報を読み込みません\n\n");
+	}
+	else{
+		die("終了（Y/Nの選択肢以外が入力された）\n");
+	}
 }
 
 # 対象画像ファイルを配列に格納する
@@ -843,6 +841,9 @@ sub sub_sort_imagefiles {
 		case 'c1-c2-date'	{
 			@arrImageFiles = sort { @$a[5] cmp @$b[5] || @$a[6] cmp @$b[6] || @$a[4] cmp @$b[4]} @arrImageFiles;
 		}
+		case 'c1-date'	{
+			@arrImageFiles = sort { @$a[5] cmp @$b[5] || @$a[4] cmp @$b[4]} @arrImageFiles;
+		}
 	}
 
 }
@@ -908,6 +909,8 @@ sub sub_make_thumbnail {
 			if(length($strFilenameInput) <= 0){ next; }
 			$strFilenameOutput = $str_dir_base . $_->[3];	# サムネイル画像ファイルへのフルパス
 			my $exifRotate = $_->[7];		# exif回転情報
+
+			unless( -e $strFilenameOutput ){ next; }	# 入力ファイルが見つからなければスキップする
 
 			unless(-d sub_conv_to_local_charset(dirname($strFilenameOutput))){
 				mkdir(sub_conv_to_local_charset(dirname($strFilenameOutput))) or die("サムネイルディレクトリ".dirname($strFilenameOutput)."が作成できない\nプログラムを終了します\n");
@@ -981,7 +984,7 @@ sub sub_create_html {
 		open(FH_OUT, '>'.sub_conv_to_local_charset($str_filepath_html)) or die;
 		binmode(FH_OUT, ":utf8");
 
-		printf(FH_OUT "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">\n" .
+		print(FH_OUT "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">\n" .
 			"<html xmlns=\"http://www.w3.org/1999/xhtml\" xml:lang=\"ja\" lang=\"ja\" dir=\"ltr\">\n" .
 			"<head>\n" .
 			"  <meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n" .
@@ -1014,17 +1017,22 @@ sub sub_create_html {
 			"  }\n".
 			"-->\n  </style>\n" .
 			"</head>\n" .
-			"<body>\n" .
-			"<p>%d files</p>\n",
-			$#arrImageFiles + 1);
+			"<body>\n");
 
-		if($flag_nowrite_noexist == 1){
-			foreach(@arrImageFiles){
-				unless(-f $_->[0]){
-					print(FH_OUT "<p>image file ".$_->[1].'/'.$_->[2]." not exist</p>\n");
-				}
+		my $num_image_files = 0;
+		foreach(@arrImageFiles){
+			# comment 3による出力制御
+			my $str_comment3_num = $_->[8];
+			$str_comment3_num =~ tr/0-9//cd;	# 0-9以外を削除
+			if($flag_filter_by_comment3 != 0 && (length($str_comment3_num)<=0 || int($str_comment3_num)<$flag_filter_by_comment3)){ next; }
+
+			if( !(-f $_->[0]) && $flag_nowrite_noexist == 0){
+				print(FH_OUT "<p>image file ".$_->[1].'/'.$_->[2]." not exist</p>\n");
+				next;
 			}
+			$num_image_files++;
 		}
+		printf(FH_OUT "<p>%d files</p>\n", $num_image_files);
 
 		if($flag_html_style eq 'line-style') {
 			# 1行1画像形式のとき
@@ -1039,7 +1047,7 @@ sub sub_create_html {
 			# comment 3による出力制御
 			my $str_comment3_num = $_->[8];
 			$str_comment3_num =~ tr/0-9//cd;	# 0-9以外を削除
-			if($flag_filter_by_comment3 != 0 && (length($str_comment3_num)<=0 || int($_->[8])<$flag_filter_by_comment3)){ next; }
+			if($flag_filter_by_comment3 != 0 && (length($str_comment3_num)<=0 || int($str_comment3_num)<$flag_filter_by_comment3)){ next; }
 
 			my $strFilenameInput = $_->[1] . '/' . $_->[2];		# 画像への相対パス
 			if($_->[1] eq ''){ $strFilenameInput = $_->[2]; }	# ディレクトリ直下の場合はファイル名のみ
@@ -1064,46 +1072,51 @@ sub sub_create_html {
 					($flag_html_hide_comment3 == 0 ? $_->[8] : ''));	# [8]: comment 3
 			}
 			elsif($flag_html_style eq 'grid-style') {
-				if($flag_sort_order eq 'c1-c2-date'){		# comment1でセh3クションを区切るグリッドスタイル
+				if($flag_sort_order eq 'c1-c2-date' || $flag_sort_order eq 'c1-date'){		# comment1で<h3>セクションを区切るグリッドスタイル
 					if($_->[5] ne $str_prev_comment1){
 						my $str_comment = $_->[5];
 						$str_comment =~ s#(<br>|<br />)##ig;
 						print(FH_OUT "<h3>".$str_comment."</h3>\n");
 						$str_prev_comment1 = $_->[5];
 					}
-					my $str_comment = $_->[6];	# [6]: comment 2
-					$str_comment =~ s#(<br>|<br />)#, #ig;
-					printf(FH_OUT "<div class=\"gallerybox\" style=\"width:%dpx; height:%dpx;\"><div class=\"g-photo\"><a href=\"%s\"><img src=\"%s\" alt=\"\" width=\"%d\" height=\"%d\" /></a></div><div class=\"g-comment2\">%s</div></div>\n",
+				}
+				my $str_c1 = $_->[5];	# [5]: comment 1
+				$str_c1 =~ s#(<br>|<br />)#, #ig;	# 改行記号をコンマに置き換える
+				my $str_c2 = $_->[6];	# [6]: comment 2
+				$str_c2 =~ s#(<br>|<br />)#, #ig;	# 改行記号をコンマに置き換える
+				if($flag_html_gridstyle_comment eq 'c2'){
+					my $str_date_c1 = sprintf("%04d/%02d/%02d %02d:%02d  %s", $tm[5]+1900, $tm[4]+1, $tm[3], $tm[2], $tm[1], $_->[5]);
+					$str_date_c1 =~ s#(<br>|<br />)# #ig;
+					printf(FH_OUT "<div class=\"gallerybox\" style=\"width:%dpx; height:%dpx;\"><div class=\"g-photo\"><a href=\"%s\"><img src=\"%s\" alt=\"\" title=\"%s\" width=\"%d\" height=\"%d\" /></a></div><div class=\"g-comment2\">%s</div></div>\n",
 						$arrSize[0] > $arrSize[1] ? $arrSize[0]+10 : $arrSize[1]+10,
 						$arrSize[0] > $arrSize[1] ? $arrSize[0]+60 : $arrSize[1]+60,
 						$strFilenameInput,
 						$strFilenameOutput,
+						$str_date_c1,	# img title 属性
 						$arrSize[0], $arrSize[1],
-						$str_comment);
+						$str_c2);
 				}
-				else{		# 単純なグリッドスタイル（h3セクションによる区切り無し）
-					if($flag_html_gridstyle_comment eq 'date-c1-c2'){
-						printf(FH_OUT "<div class=\"gallerybox\" style=\"width:%dpx; height:%dpx;\"><div class=\"g-photo\"><a href=\"%s\"><img src=\"%s\" alt=\"\" width=\"%d\" height=\"%d\" /></a></div><div class=\"g-date\">%04d/%02d/%02d %02d:%02d:%02d</div><div class=\"g-comment1\">%s</div><div class=\"g-comment2\">%s</div></div>\n",
-							$arrSize[0] > $arrSize[1] ? $arrSize[0]+10 : $arrSize[1]+10,
-							$arrSize[0] > $arrSize[1] ? $arrSize[0]+40 : $arrSize[1]+40,
-							$strFilenameInput,
-							$strFilenameOutput,
-							$arrSize[0], $arrSize[1],
-							$tm[5]+1900, $tm[4]+1, $tm[3], $tm[2], $tm[1], $tm[0],	# [4] : unix秒
-							$_->[5],	# [5]: comment 1
-							$_->[6]);	# [6]: comment 2
-					}
-					elsif($flag_html_gridstyle_comment eq 'basename-c1-c2'){
-						printf(FH_OUT "<div class=\"gallerybox\" style=\"width:%dpx; height:%dpx;\"><div class=\"g-photo\"><a href=\"%s\"><img src=\"%s\" alt=\"\" width=\"%d\" height=\"%d\" /></a></div><div class=\"g-filename\">%s</div><div class=\"g-comment1\">%s</div><div class=\"g-comment2\">%s</div></div>\n",
-							$arrSize[0] > $arrSize[1] ? $arrSize[0]+10 : $arrSize[1]+10,
-							$arrSize[0] > $arrSize[1] ? $arrSize[0]+40 : $arrSize[1]+40,
-							$strFilenameInput,
-							$strFilenameOutput,
-							$arrSize[0], $arrSize[1],
-							$_->[2],	# [2] : 画像ファイルのbasename
-							$_->[5],	# [5]: comment 1
-							$_->[6]);	# [6]: comment 2
-					}
+				if($flag_html_gridstyle_comment eq 'date-c1-c2'){
+					printf(FH_OUT "<div class=\"gallerybox\" style=\"width:%dpx; height:%dpx;\"><div class=\"g-photo\"><a href=\"%s\"><img src=\"%s\" alt=\"\" width=\"%d\" height=\"%d\" /></a></div><div class=\"g-date\">%04d/%02d/%02d %02d:%02d:%02d</div><div class=\"g-comment1\">%s</div><div class=\"g-comment2\">%s</div></div>\n",
+						$arrSize[0] > $arrSize[1] ? $arrSize[0]+10 : $arrSize[1]+10,
+						$arrSize[0] > $arrSize[1] ? $arrSize[0]+40 : $arrSize[1]+40,
+						$strFilenameInput,
+						$strFilenameOutput,
+						$arrSize[0], $arrSize[1],
+						$tm[5]+1900, $tm[4]+1, $tm[3], $tm[2], $tm[1], $tm[0],	# [4] : unix秒
+						$str_c1,	# [5]: comment 1
+						$str_c2);	# [6]: comment 2
+				}
+				elsif($flag_html_gridstyle_comment eq 'basename-c1-c2'){
+					printf(FH_OUT "<div class=\"gallerybox\" style=\"width:%dpx; height:%dpx;\"><div class=\"g-photo\"><a href=\"%s\"><img src=\"%s\" alt=\"\" width=\"%d\" height=\"%d\" /></a></div><div class=\"g-filename\">%s</div><div class=\"g-comment1\">%s</div><div class=\"g-comment2\">%s</div></div>\n",
+						$arrSize[0] > $arrSize[1] ? $arrSize[0]+10 : $arrSize[1]+10,
+						$arrSize[0] > $arrSize[1] ? $arrSize[0]+40 : $arrSize[1]+40,
+						$strFilenameInput,
+						$strFilenameOutput,
+						$arrSize[0], $arrSize[1],
+						$_->[2],	# [2] : 画像ファイルのbasename
+						$str_c1,	# [5]: comment 1
+						$str_c2);	# [6]: comment 2
 				}
 			}
 			elsif($flag_html_style eq 'grid-multidir-style') {
