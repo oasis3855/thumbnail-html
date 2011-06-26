@@ -11,6 +11,7 @@
 # version 1.1 (2010/November/23)
 # version 1.2 (2010/December/16)
 # version 1.3 (2011/January/09)
+# version 1.4 (2011/June/26)
 #
 # GNU GPL Free Software
 #
@@ -92,7 +93,7 @@ my $flag_copy_prev = 1;		#「 空白時、前行値のコピーを行う」ス�
 my $flag_html_style = 'line-style';	# line-style:1行1画像table, grid-style:画像をグリッド表示
 my $flag_html_gridstyle_comment = 'date-comment';	# grid-style時のコメント表示種類 date-comment / filename
 my $flag_conv_time = 1;		# csv変換時に「日時をunix秒に変換する」スイッチ
-my $flag_nowrite_noexist = 1;	# html作成時に、存在しないファイルは書き出さない（html更新、csvから変換時用）
+my $flag_nowrite_noexist = 0;	# html作成時に、存在しないファイルは書き出さない（html更新、csvから変換時用）
 my $flag_ignore_exif = 0;	# exif情報を読み込まない
 
 my $flag_html_hide_comment3 = 0;		# HTML出力時にcomment 3 フィールドを隠す (1:YES)
@@ -608,6 +609,24 @@ sub sub_user_input_htmlstyle {
 			$flag_filter_by_comment3 = 0;
 			print("Fカラムによる出力制御 : OFF (想定外の入力のため、機能OFFにしました）\n\n");
 		}
+
+		# 画像が存在しない場合、HTML出力をスキップする（既存HTML読み込みやCSV読み込みの場合に有効）
+		if($flag_read_html != 0 || $flag_mode eq 'csv2html'){
+			print("HTML/CSV読み込みデータの画像が見つからなくてもHTML出力する (Y/N) [Y]：");
+			$_ = <STDIN>;
+			chomp();
+			if(uc($_) eq 'Y' || length($_)<=0){
+				$flag_nowrite_noexist = 0;
+				print("画像が見つからなくてもHTML出力します（エラー表示もでます）\n");
+			}
+			elsif(uc($_) eq 'N'){
+				$flag_nowrite_noexist = 1;
+				print("画像が見つからない場合は、該当行を削除します\n");
+			}
+			else{
+				die("終了（Y/Nの選択肢以外が入力された）\n");
+			}
+		}
 	}
 
 
@@ -901,6 +920,7 @@ sub sub_make_thumbnail {
 
 		my $nCountWrite = 0;
 		my $nCountSkip = 0;
+		my $nCountSkip_Comment3 = 0;
 		my $nCountError = 0;
 		foreach(@arrImageFiles)
 		{
@@ -910,7 +930,19 @@ sub sub_make_thumbnail {
 			$strFilenameOutput = $str_dir_base . $_->[3];	# サムネイル画像ファイルへのフルパス
 			my $exifRotate = $_->[7];		# exif回転情報
 
-			unless( -e $strFilenameInput ){ $nCountError++; next; }	# 入力ファイルが見つからなければスキップする
+			# comment 3による出力制御
+			my $str_comment3_num = $_->[8];
+			$str_comment3_num =~ tr/0-9//cd;	# 0-9以外を削除
+			if($flag_filter_by_comment3 != 0 && (length($str_comment3_num)<=0 || int($str_comment3_num)<$flag_filter_by_comment3)){
+				$nCountSkip_Comment3++;
+				next;
+			}
+			# 入力ファイルが見つからなければスキップする
+			unless( -e $strFilenameInput ){
+				print("画像ファイル ".$strFilenameInput." が見つからない\n");
+				$nCountError++;
+				next;
+			}
 
 			unless(-d sub_conv_to_local_charset(dirname($strFilenameOutput))){
 				mkdir(sub_conv_to_local_charset(dirname($strFilenameOutput))) or die("サムネイルディレクトリ".dirname($strFilenameOutput)."が作成できない\nプログラムを終了します\n");
@@ -957,7 +989,7 @@ sub sub_make_thumbnail {
 			$nCountWrite++;
 
 		}
-		print("\nサムネイル作成処理 成功：".$nCountWrite.", 既存スキップ：".$nCountSkip.", エラー：".$nCountError."\n");
+		print("\nサムネイル作成処理 成功：".$nCountWrite.", 既存:c3制御スキップ：".$nCountSkip.":".$nCountSkip_Comment3.", エラー：".$nCountError."\n");
 
 	};
 	if($@){
@@ -1043,11 +1075,12 @@ sub sub_create_html {
 		my $str_prev_comment1 = '';
 		foreach(@arrImageFiles)
 		{
-			if($flag_nowrite_noexist == 1 && !(-f $_->[0])){ next; }	# 存在しない画像をスキップ
 			# comment 3による出力制御
 			my $str_comment3_num = $_->[8];
 			$str_comment3_num =~ tr/0-9//cd;	# 0-9以外を削除
 			if($flag_filter_by_comment3 != 0 && (length($str_comment3_num)<=0 || int($str_comment3_num)<$flag_filter_by_comment3)){ next; }
+
+			if($flag_nowrite_noexist == 1 && !(-f $_->[0])){ next; }	# 存在しない画像をスキップ
 
 			my $strFilenameInput = $_->[1] . '/' . $_->[2];		# 画像への相対パス
 			if($_->[1] eq ''){ $strFilenameInput = $_->[2]; }	# ディレクトリ直下の場合はファイル名のみ
