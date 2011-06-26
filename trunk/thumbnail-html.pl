@@ -910,7 +910,7 @@ sub sub_make_thumbnail {
 			$strFilenameOutput = $str_dir_base . $_->[3];	# サムネイル画像ファイルへのフルパス
 			my $exifRotate = $_->[7];		# exif回転情報
 
-			unless( -e $strFilenameOutput ){ next; }	# 入力ファイルが見つからなければスキップする
+			unless( -e $strFilenameInput ){ $nCountError++; next; }	# 入力ファイルが見つからなければスキップする
 
 			unless(-d sub_conv_to_local_charset(dirname($strFilenameOutput))){
 				mkdir(sub_conv_to_local_charset(dirname($strFilenameOutput))) or die("サムネイルディレクトリ".dirname($strFilenameOutput)."が作成できない\nプログラムを終了します\n");
