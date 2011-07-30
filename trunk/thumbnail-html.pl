@@ -318,7 +318,7 @@ sub sub_user_input_init_html2csv {
 	$_ = <STDIN>;
 	chomp();
 	unless(length($_)<=0){
-		if($_ =~ /\//){ die("終了（理由：ファイル名に / が入っています）\n"); }
+		if($_ =~ m|/|){ die("終了（理由：ファイル名に / が入っています）\n"); }
 		$str_filepath_csv = $str_dir_base . $_;
 	}
 	if(-f sub_conv_to_local_charset($str_filepath_csv) && -w sub_conv_to_local_charset($str_filepath_csv)){
@@ -389,7 +389,7 @@ sub sub_user_input_init_csv2html {
 	$_ = <STDIN>;
 	chomp();
 	unless(length($_)<=0){
-		if($_ =~ /\//){ die("終了（理由：ファイル名に / が入っています）\n"); }
+		if($_ =~ m|/|){ die("終了（理由：ファイル名に / が入っています）\n"); }
 		$str_filepath_html = $str_dir_base . $_;
 	}
 	if(-f sub_conv_to_local_charset($str_filepath_html) && -w sub_conv_to_local_charset($str_filepath_html)){
@@ -1072,6 +1072,10 @@ sub sub_create_html {
 			($flag_html_hide_comment3 == 0 ? "<th>F</th>" : "" ) . "</tr>\n");
 		}
 	
+		# grid-style 時に、ファイル末尾に書きこむCSV形式データ
+		my $csv = Text::CSV_XS->new({binary=>1}); # 日本語の場合は binary を ON にする
+		my $str_csvcomment = '';
+
 		my $str_prev_comment1 = '';
 		foreach(@arrImageFiles)
 		{
@@ -1151,6 +1155,13 @@ sub sub_create_html {
 						$str_c1,	# [5]: comment 1
 						$str_c2);	# [6]: comment 2
 				}
+
+				# grid-style 時に、ファイル末尾に書きこむCSV形式データを作成する
+				$csv->combine(($strFilenameInput, $strFilenameOutput,$_->[4], $_->[5], $_->[6], $_->[7]));
+				my $str = $csv->string()."\n";
+				$str =~ s/<!--/<==/m;	# HTMLコメント開始タグを消去
+				$str =~ s/-->/==>/m;	# HTMLコメント終了タグを消去
+				$str_csvcomment .= $str;
 			}
 			elsif($flag_html_style eq 'grid-multidir-style') {
 					printf(FH_OUT "<div class=\"gallerybox\" style=\"width:%dpx; height:%dpx;\"><div class=\"g-photo\"><a href=\"%s\"><img src=\"%s\" alt=\"\" width=\"%d\" height=\"%d\" /></a></div><div class=\"g-comment1\">%s</div></div>\n",
@@ -1165,6 +1176,7 @@ sub sub_create_html {
 
 		}
 		if($flag_html_style eq 'line-style') { print(FH_OUT "</table>\n"); }
+		if($flag_html_style eq 'grid-style') { print(FH_OUT "\n\n<!--\n\n".$str_csvcomment."\n\n-->\n"); }
 		
 		print(FH_OUT "</body>\n</html>\n");
 
