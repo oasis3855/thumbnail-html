@@ -789,6 +789,7 @@ sub sub_scan_imagefiles {
 
 			# Exif日時を読み込む
 			$tmpDate = $exifTool->GetValue('CreateDate');
+			if(!defined($tmpDate)){ $tmpDate = $exifTool->GetValue('DateTimeOriginal'); }
 			if(!defined($tmpDate)){ $tmpDate = (stat(sub_conv_to_local_charset($strFullPath)))[9]; }	# Exifが無い場合は最終更新日
 			else{
 				my @arrTime_t = split(/,/,$tmpDate);
@@ -800,7 +801,7 @@ sub sub_scan_imagefiles {
 			unless(defined($exifRotate)){ $exifRotate = 1; }
 			else{ $exifRotate = int($exifTool->GetValue('Orientation', 'Raw')); }
 			if($exifRotate == 0){ $exifRotate = 1; }
-			$exifRotate = int($exifTool->GetValue('Orientation', 'Raw'));
+#			$exifRotate = int($exifTool->GetValue('Orientation', 'Raw'));
 		}
 
 		# サムネイルファイルへの相対パスを作成
