@@ -92,6 +92,7 @@ my $flag_sort_order = 'file-name';	# ソート順
 my $flag_copy_prev = 1;		#「 空白時、前行値のコピーを行う」スイッチ (0:Off, 1:Comment1, 2:Comment1+2)
 my $flag_html_style = 'line-style';	# line-style:1行1画像table, grid-style:画像をグリッド表示
 my $flag_html_gridstyle_comment = 'date-comment';	# grid-style時のコメント表示種類 date-comment / filename
+my $flag_html_gridstyle_a_title = 1;	# grid-style時に<a ..>リンクにtitle属性を入れる（lightbox対応）
 my $flag_conv_time = 1;		# csv変換時に「日時をunix秒に変換する」スイッチ
 my $flag_nowrite_noexist = 0;	# html作成時に、存在しないファイルは書き出さない（html更新、csvから変換時用）
 my $flag_ignore_exif = 0;	# exif情報を読み込まない
@@ -590,6 +591,19 @@ sub sub_user_input_htmlstyle {
 			elsif($_ eq '3'){ $flag_html_gridstyle_comment = 'c2'; }
 			else{ die("終了（入力範囲は 1-3 です）\n"); }
 			print("表示する情報 : " . $flag_html_gridstyle_comment . "\n\n");
+
+			# lightbox対応 <a ...>にtitle属性にコメントを代入 / rel属性を設定する
+			print("Lightbox対応・a linkにtitle属性,rel属性を入れる (Y/N) [N]：");
+			$_ = <STDIN>;
+			chomp();
+			if(uc($_) eq 'Y'){
+				$flag_html_gridstyle_a_title = 1;
+				print("Lightbox 対応 : ON\n\n");
+			}
+			else{
+				$flag_html_gridstyle_a_title = 0;
+				print("Lightbox 対応 : OFF\n\n");
+			}
 		}
 		
 		# comment 3 によるフィルタリング設定
@@ -853,16 +867,16 @@ sub sub_sort_imagefiles {
 			@arrImageFiles = sort { @$a[1] cmp @$b[1] || @$b[2] cmp @$a[2] } @arrImageFiles;
 		}
 		case 'file-date'	{
-			@arrImageFiles = sort { @$a[1] cmp @$b[1] || @$a[4] cmp @$b[4] } @arrImageFiles;
+			@arrImageFiles = sort { @$a[1] cmp @$b[1] || @$a[4] <=> @$b[4] || @$a[2] cmp @$b[2] } @arrImageFiles;
 		}
 		case 'file-date-reverse'	{
-			@arrImageFiles = sort { @$a[1] cmp @$b[1] || @$b[4] cmp @$a[4] } @arrImageFiles;
+			@arrImageFiles = sort { @$a[1] cmp @$b[1] || @$b[4] <=> @$a[4] || @$a[2] cmp @$b[2] } @arrImageFiles;
 		}
 		case 'c1-c2-date'	{
-			@arrImageFiles = sort { @$a[5] cmp @$b[5] || @$a[6] cmp @$b[6] || @$a[4] cmp @$b[4]} @arrImageFiles;
+			@arrImageFiles = sort { @$a[5] cmp @$b[5] || @$a[6] cmp @$b[6] || @$a[4] <=> @$b[4] || @$a[2] cmp @$b[2] } @arrImageFiles;
 		}
 		case 'c1-date'	{
-			@arrImageFiles = sort { @$a[5] cmp @$b[5] || @$a[4] cmp @$b[4]} @arrImageFiles;
+			@arrImageFiles = sort { @$a[5] cmp @$b[5] || @$a[4] <=> @$b[4] || @$a[2] cmp @$b[2] } @arrImageFiles;
 		}
 	}
 
@@ -1125,10 +1139,13 @@ sub sub_create_html {
 				if($flag_html_gridstyle_comment eq 'c2'){
 					my $str_date_c1 = sprintf("%04d/%02d/%02d %02d:%02d  %s", $tm[5]+1900, $tm[4]+1, $tm[3], $tm[2], $tm[1], $_->[5]);
 					$str_date_c1 =~ s#(<br>|<br />)# #ig;
-					printf(FH_OUT "<div class=\"gallerybox\" style=\"width:%dpx; height:%dpx;\"><div class=\"g-photo\"><a href=\"%s\"><img src=\"%s\" alt=\"\" title=\"%s\" width=\"%d\" height=\"%d\" /></a></div><div class=\"g-comment2\">%s</div></div>\n",
+					my $str_alink_lightbox = "rel=\"lightbox_group\" title=\"".$str_date_c1.", ".$str_c2."\"";
+					if($flag_html_gridstyle_a_title != 1){ $str_alink_lightbox = ""; }
+					printf(FH_OUT "<div class=\"gallerybox\" style=\"width:%dpx; height:%dpx;\"><div class=\"g-photo\"><a href=\"%s\" %s><img src=\"%s\" alt=\"\" title=\"%s\" width=\"%d\" height=\"%d\" /></a></div><div class=\"g-comment2\">%s</div></div>\n",
 						$arrSize[0] > $arrSize[1] ? $arrSize[0]+10 : $arrSize[1]+10,
 						$arrSize[0] > $arrSize[1] ? $arrSize[0]+60 : $arrSize[1]+60,
 						$strFilenameInput,
+						$str_alink_lightbox,
 						$strFilenameOutput,
 						$str_date_c1,	# img title 属性
 						$arrSize[0], $arrSize[1],
@@ -1457,6 +1474,7 @@ sub sub_read_from_csv {
 			{
 				$exifTool->ImageInfo(sub_conv_to_local_charset($arrTemp[0]));
 				my $tmpDate = $exifTool->GetValue('CreateDate');
+				if(!defined($tmpDate)){ $tmpDate = $exifTool->GetValue('DateTimeOriginal'); }
 				if(!defined($tmpDate)){ $tmpDate = (stat(sub_conv_to_local_charset($arrTemp[0])))[9]; }	# Exifが無い場合は最終更新日
 				else{
 					my @arrTime_t = split(/,/,$tmpDate);
@@ -1469,7 +1487,7 @@ sub sub_read_from_csv {
 				unless(defined($exifRotate)){ $exifRotate = 1; }
 				else{ $exifRotate = int($exifTool->GetValue('Orientation', 'Raw')); }
 				if($exifRotate == 0){ $exifRotate = 1; }
-				$exifRotate = int($exifTool->GetValue('Orientation', 'Raw'));
+#				$exifRotate = int($exifTool->GetValue('Orientation', 'Raw'));
 				$arrTemp[7] = $exifRotate;
 			}
 
