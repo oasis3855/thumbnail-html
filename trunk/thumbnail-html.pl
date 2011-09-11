@@ -51,6 +51,7 @@ use pQuery;
 use HTML::Scrubber;
 use HTML::TagParser;
 use HTML::HeadParser;
+use HTML::Entities;
 use Time::Local;
 use File::Copy;
 use Text::CSV_XS;
@@ -607,7 +608,7 @@ sub sub_user_input_htmlstyle {
 		}
 		
 		# comment 3 によるフィルタリング設定
-		print("HTML右端のFカラムの数値による出力制御。指定した数値以上を出力します。0は出力制御を行わない\n 出力制御する場合は、値を入力してください (0,1,2,3...) [0]：");
+		print("HTML右端カラムの数値による出力制御（ユーザ指定skip）\n 指定した数値以上の場合出力します。0は出力制御を行わない\n 出力制御する場合は、値を入力してください (0,1,2,3...) [0]：");
 		$_ = <STDIN>;
 		chomp();
 		$_ =~ tr/0-9//cd; if($_ eq ''){ $_ = '0'; }	# [0-9]以外の文字を除去。数値なしの時はデフォルト値
@@ -754,9 +755,6 @@ sub sub_scan_imagefiles {
 	my $tmpDate = undef;	# UNIX秒（ファイル/Exifのタイムスタンプ）
 	my $nCountNewfile = 0;		# 新規追加されたファイル数を数える
 	my $nCountUpdatefile = 0;		# 新規追加されたファイル数を数える
-	my $exifTool = Image::ExifTool->new();
-#	$exifTool->Options(DateFormat => "%s", StrictDate=> 1);		# Windows版ActivePerlでは%sはサポート外
-	$exifTool->Options(DateFormat => "%Y,%m,%d,%H,%M,%S", StrictDate=> 1);
 
 	if(defined($str_dir_image)){
 		my $strScanPattern = '';
@@ -793,30 +791,8 @@ sub sub_scan_imagefiles {
 		# Exif回転情報（1:0 deg, 3:180 deg, 6:90 deg(CW), 8:270 deg (CW))
 		my $exifRotate = 1;		# 初期値は"回転なし"
 		
-		# Exif読み込み
-		if($flag_ignore_exif == 1){
-			# Exif情報を読み込まないモードの時い
-			$tmpDate = (stat(sub_conv_to_local_charset($strFullPath)))[9];	# ファイルの最終更新日
-		}
-		else{
-			$exifTool->ImageInfo(sub_conv_to_local_charset($strFullPath));
-
-			# Exif日時を読み込む
-			$tmpDate = $exifTool->GetValue('CreateDate');
-			if(!defined($tmpDate)){ $tmpDate = $exifTool->GetValue('DateTimeOriginal'); }
-			if(!defined($tmpDate)){ $tmpDate = (stat(sub_conv_to_local_charset($strFullPath)))[9]; }	# Exifが無い場合は最終更新日
-			else{
-				my @arrTime_t = split(/,/,$tmpDate);
-				$tmpDate = mktime($arrTime_t[5], $arrTime_t[4], $arrTime_t[3], $arrTime_t[2], $arrTime_t[1]-1, $arrTime_t[0]-1900);
-			}
-
-			# 回転情報を得る（1:0 deg, 3:180 deg, 6:90 deg(CW), 8:270 deg (CW))
-			$exifRotate = $exifTool->GetValue('Orientation', 'Raw');
-			unless(defined($exifRotate)){ $exifRotate = 1; }
-			else{ $exifRotate = int($exifTool->GetValue('Orientation', 'Raw')); }
-			if($exifRotate == 0){ $exifRotate = 1; }
-#			$exifRotate = int($exifTool->GetValue('Orientation', 'Raw'));
-		}
+		# Exif日時、回転情報読み込み
+		($tmpDate, $exifRotate) = sub_read_exifdata(sub_conv_to_local_charset($strFullPath));
 
 		# サムネイルファイルへの相対パスを作成
 		my $strThumbName = $dirname . '/' . $str_dir_thumbnail . $basename.$ext;
@@ -853,6 +829,47 @@ sub sub_scan_imagefiles {
 
 }
 
+
+sub sub_read_exifdata {
+	my $strFilename = shift;	# 対象ファイル（引数）
+	my $exifDate = 0;		# Exif日時（UNIX秒）
+	my $exifRotate = 1;		# 回転情報（初期値は1）
+	my $exifTool = Image::ExifTool->new();
+#	$exifTool->Options(DateFormat => "%s", StrictDate=> 1);		# Windows版ActivePerlでは%sはサポート外
+	$exifTool->Options(DateFormat => "%Y,%m,%d,%H,%M,%S", StrictDate=> 1);
+
+	if(!defined($strFilename) || $strFilename eq '' || !(-f $strFilename)){
+		return (0, 0);	# ファイルが存在しないとき
+	}
+
+	# Exif読み込み
+	if($flag_ignore_exif == 1){
+		# Exif情報を読み込まないモードの時い
+		$exifDate = (stat($strFilename))[9];	# ファイルの最終更新日
+	}
+	else{
+		$exifTool->ImageInfo($strFilename);
+
+		# Exif日時を読み込む
+		$exifDate = $exifTool->GetValue('CreateDate');
+		if(!defined($exifDate)){ $exifDate = $exifTool->GetValue('DateTimeOriginal'); }
+		if(!defined($exifDate)){ $exifDate = (stat($strFilename))[9]; }	# Exifが無い場合は最終更新日
+		else{
+			my @arrTime_t = split(/,/,$exifDate);
+			$exifDate = mktime($arrTime_t[5], $arrTime_t[4], $arrTime_t[3], $arrTime_t[2], $arrTime_t[1]-1, $arrTime_t[0]-1900);
+		}
+		unless( $exifDate =~ /^\d+$/ ){ $exifDate = 0; }	# exif日時が規定以外の時は 0 を代入
+		
+
+		# 回転情報を得る（1:0 deg, 3:180 deg, 6:90 deg(CW), 8:270 deg (CW))
+		$exifRotate = $exifTool->GetValue('Orientation', 'Raw');
+		unless(defined($exifRotate)){ $exifRotate = 1; }
+		else{ $exifRotate = int($exifTool->GetValue('Orientation', 'Raw')); }
+		if($exifRotate == 0){ $exifRotate = 1; }
+	}
+
+	return ($exifDate, $exifRotate);
+}
 
 # 対象画像ファイルの配列をソートする
 sub sub_sort_imagefiles {
@@ -954,7 +971,7 @@ sub sub_make_thumbnail {
 			}
 			# 入力ファイルが見つからなければスキップする
 			unless( -e $strFilenameInput ){
-				print("画像ファイル ".$strFilenameInput." が見つからない\n");
+#				print("画像ファイル ".$strFilenameInput." が見つからない\n");
 				$nCountError++;
 				next;
 			}
@@ -1004,7 +1021,7 @@ sub sub_make_thumbnail {
 			$nCountWrite++;
 
 		}
-		print("\nサムネイル作成処理 成功：".$nCountWrite.", 既存:c3制御スキップ：".$nCountSkip.":".$nCountSkip_Comment3.", エラー：".$nCountError."\n");
+		print("\nサムネイル作成：".$nCountWrite.", 既存skip：".$nCountSkip.", ユーザ指定skip：".$nCountSkip_Comment3.", エラー：".$nCountError."\n");
 
 	};
 	if($@){
@@ -1110,6 +1127,11 @@ sub sub_create_html {
 #				$strFilenameOutput =~ s/^\.\///g;	# 先頭の ./ を削除
 			my @arrSize = imgsize(sub_conv_to_local_charset($str_dir_base . $strFilenameOutput));
 			if(!defined($arrSize[0]) || !defined($arrSize[1])){ @arrSize = (0,0); }
+			# コメント1,2,3内のエンティティ文字をエスケープする
+			if($_->[5] ne ''){ $_->[5] = sub_entity_encode($_->[5]); }
+			if($_->[6] ne ''){ $_->[6] = sub_entity_encode($_->[6]); }
+			if($_->[8] ne ''){ $_->[8] = sub_entity_encode($_->[8]); }
+			
 			if($flag_html_style eq 'line-style') {
 				printf(FH_OUT "  <tr><td>%s</td><td>%s</td><td><a href=\"%s\"><img src=\"%s\" alt=\"\" width=\"%d\" height=\"%d\" /></a></td><td>%04d/%02d/%02d %02d:%02d:%02d</td><td>%s</td><td>%s</td>" .
 					($flag_html_hide_comment3 == 0 ? "<td>%s</td>" : "%s" ) . "</tr>\n",
@@ -1246,7 +1268,22 @@ sub sub_parse_html {
 		$enc = $flag_charcode;
 	}
 
-	pQuery(sub_conv_to_local_charset($str_filepath_html))->find("tr")->each( sub{
+	# 入力HTMLファイルを一旦バッファに読み込み、文字コードをutf8に変換する
+	# （pQueryはutf8の時のみ、エスケープ文字を正しく扱えるため）
+	my $str_buf = '';
+	if(open(IN, '< '.sub_conv_to_local_charset($str_filepath_html))){
+		$str_buf = join("\n", <IN>);
+		close(IN);
+	}
+	if($str_buf ne '' ){ $str_buf = sub_conv_to_flagged_utf8($str_buf, $enc); }
+
+	# pQueryで消去される（pQueryの仕様？）エスケープ文字を一時保存する
+	$str_buf =~ s/&gt;/&__gt;/g;
+	$str_buf =~ s/&lt;/&__lt;/g;
+	$str_buf =~ s/&quot;/&__quot;/g;
+
+#	pQuery(sub_conv_to_local_charset($str_filepath_html))->find("tr")->each( sub{
+	pQuery($str_buf)->find("tr")->each( sub{
 		@arrCsvRaw = ();
 		$flag_indata = 0;
 		pQuery($_)->find("td")->each( sub{
@@ -1261,13 +1298,13 @@ sub sub_parse_html {
 					# HTML文字列からタグを取り除く
 					$strTemp = $scrubber->scrub($strTemp);
 
+					# pQueryで消去されるエスケープ文字を一時保存したものを元に戻す
+					$strTemp =~ s/&__gt;/&gt;/g;
+					$strTemp =~ s/&__lt;/&lt;/g;
+					$strTemp =~ s/&__quot;/&quot;/g;
 					# 文字列の調整
 					$strTemp =~ s/　/ /g;	# 全角空白→半角空白
-					$strTemp =~ s/<br><\/br>/<br>/g;		# ActivePerlの場合<br></br>→<br>
-					$strTemp =~ s/[ ]*<br>[ ]*/<br>/g;		# <br>前後の空白文字を削除
-					$strTemp =~ s/<br><br>|<br><br><br>/<br>/g;		# 連続<br>を1個に
-					$strTemp =~ s/<br>$//g;		# 行末の<br>を除去
-					$strTemp =~ s/^<br>//g;		# 行頭の<br>を除去
+					$strTemp = sub_br_revise($strTemp);		# <br>の重複、行末、行頭の場合削除
 					if($strTemp eq ' '){ $strTemp = ''; }		# "空白1文字のみ"は切り捨て
 
 					# 日時文字列をUNIX秒に変換
@@ -1454,9 +1491,19 @@ sub sub_read_from_csv {
 				1,		# [7]: Exif回転情報（1:回転なし）
 				defined($arrFields[5]) ? $arrFields[5] : '',	# [8]:comment3
 				);
-		$arrTemp[5] =~ s/<br>/<br \/>/g;		# <br>→<br />
-		$arrTemp[6] =~ s/<br>/<br \/>/g;		# <br>→<br />
-		$arrTemp[8] =~ s/<br>/<br \/>/g;		# <br>→<br />
+
+		# <br>の重複、行末、行頭の場合削除
+		$arrTemp[5] = sub_br_revise($arrTemp[5]);
+		$arrTemp[6] = sub_br_revise($arrTemp[6]);
+		$arrTemp[8] = sub_br_revise($arrTemp[8]);
+		# <br>→<br />
+		$arrTemp[5] =~ s/<br>/<br \/>/g;
+		$arrTemp[6] =~ s/<br>/<br \/>/g;
+		$arrTemp[8] =~ s/<br>/<br \/>/g;
+		# エンティティ文字をデコードする
+		if($arrTemp[5] ne ''){ $arrTemp[5] =HTML::Entities::decode_entities($arrTemp[5]); }
+		if($arrTemp[6] ne ''){ $arrTemp[6] =HTML::Entities::decode_entities($arrTemp[6]); }
+		if($arrTemp[8] ne ''){ $arrTemp[8] =HTML::Entities::decode_entities($arrTemp[8]); }
 
 		if($arrTemp[1] eq '.'){ $arrTemp[1] = ''; }		# 画像ディレクトリ ./ は空欄にする
 		$arrTemp[1] =~ s|^\.\/||g;	# 画像ディレクトリ先頭の ./ を削除
@@ -1472,22 +1519,9 @@ sub sub_read_from_csv {
 			# 画像ファイルからExif日時を読み込む
 			if(-f $arrTemp[0])
 			{
-				$exifTool->ImageInfo(sub_conv_to_local_charset($arrTemp[0]));
-				my $tmpDate = $exifTool->GetValue('CreateDate');
-				if(!defined($tmpDate)){ $tmpDate = $exifTool->GetValue('DateTimeOriginal'); }
-				if(!defined($tmpDate)){ $tmpDate = (stat(sub_conv_to_local_charset($arrTemp[0])))[9]; }	# Exifが無い場合は最終更新日
-				else{
-					my @arrTime_t = split(/,/,$tmpDate);
-					$tmpDate = mktime($arrTime_t[5], $arrTime_t[4], $arrTime_t[3], $arrTime_t[2], $arrTime_t[1]-1, $arrTime_t[0]-1900);
-				}
-				if(defined($tmpDate)){ $arrTemp[4] = $tmpDate; }
-
-				# 回転情報を得る（1:0 deg, 3:180 deg, 6:90 deg(CW), 8:270 deg (CW))
-				my $exifRotate = $exifTool->GetValue('Orientation', 'Raw');
-				unless(defined($exifRotate)){ $exifRotate = 1; }
-				else{ $exifRotate = int($exifTool->GetValue('Orientation', 'Raw')); }
-				if($exifRotate == 0){ $exifRotate = 1; }
-#				$exifRotate = int($exifTool->GetValue('Orientation', 'Raw'));
+				# exif日時、回転情報を読み込む
+				my ($tmpDate, $exifRotate) = sub_read_exifdata(sub_conv_to_local_charset($arrTemp[0]));
+				$arrTemp[4] = $tmpDate;
 				$arrTemp[7] = $exifRotate;
 			}
 
@@ -1517,11 +1551,46 @@ sub sub_check_match_file {
 	return(-1);		# 一致せず
 }
 
+
+# 文字列内のエンティティ文字をエスケープする（<br>混入対応）
+sub sub_entity_encode {
+	my $str = shift;
+	if(!defined($str) || $str eq ''){
+		return ('');
+	}
+	# <br>, <br />を\nに変更
+	$str =~ s/(<br\s*\/>|<br>)/\n/g;
+	# エンティティのエスケープ処理
+	$str = HTML::Entities::encode_entities($str, '<>&"');
+	# \nを<br />に変更
+	$str =~ s/\x0D\x0A|\x0D|\x0A/<br \/>/g;
+	
+	return($str);
+}
+
+# <br>記号の重複、イレギュラーを補正
+sub sub_br_revise {
+	my $str = shift;
+	if(!defined($str) || $str eq ''){ return(''); }
+
+	$str =~ s/<br><\/br>/<br>/g;		# ActivePerlの場合<br></br>→<br>
+	$str =~ s/<[ ]*br[ ]*>/<br>/g;		# <br>内部前後の空白文字を削除
+	$str =~ s/[ ]*<br>[ ]*/<br>/g;		# <br>前後の空白文字を削除
+	$str =~ s/(<br>){2,}/<br>/g;		# 連続<br>を1個に
+	$str =~ s/<br>$//g;		# 行末の<br>を除去
+	$str =~ s/^<br>//g;		# 行頭の<br>を除去
+
+	return($str);
+}
+
 # 任意の文字コードの文字列を、UTF-8フラグ付きのUTF-8に変換する
 sub sub_conv_to_flagged_utf8{
 	my $str = shift;
 	my $enc_force = undef;
 	if(@_ >= 1){ $enc_force = shift; }		# デコーダの強制指定
+
+	if(!defined($str) || $str eq ''){ return(''); }		# $strが存在しない場合
+	if(Encode::is_utf8($str)){ return($str); }	# 既にflagged utf-8に変換済みの場合
 	
 	# デコーダが強制的に指定された場合
 	if(defined($enc_force)){
@@ -1628,7 +1697,7 @@ sub sub_get_encode_of_file{
 				elsif(lc($content_enc) =~ m/euc-jp/){ $enc = 'euc-jp'; }
 				
 				print("HTML Content-Type detect : ". $content_enc ." (is overrided)\n");
-				$enc = $content_enc;
+#				$enc = $content_enc;
 			}
 		}
 	}
