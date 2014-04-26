@@ -14,6 +14,7 @@
 # version 1.4 (2011/June/26)
 # version 1.5 (2012/January/14)
 # version 1.6 (2012/June/10)
+# version 1.6.1 (2014/April/26)
 #
 # GNU GPL Free Software
 #
@@ -1363,7 +1364,7 @@ sub sub_parse_html {
 		$flag_indata = 0;
 		pQuery($_)->find("td")->each( sub{
 			$strTemp = sub_conv_to_flagged_utf8($_->innerHTML(), $enc);
-			$strTemp =~ s/\x0D\x0A|\x0D|\x0A/<br \/>/g; # 改行の除去
+			$strTemp =~ s/\x0D\x0A|\x0D|\x0A//g; # 改行の除去
 			$strTemp =~ s/\x09/\x20/g; # タブをスペースに変換
 			$strTemp =~ s/\x20+/\x20/g; # 連続したスペースの統合
 
