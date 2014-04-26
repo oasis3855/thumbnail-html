@@ -5,7 +5,7 @@
 # Software name : Make Thumbnail HTML （サムネイルHTML作成）
 #
 # Copyright (C) INOUE Hirokazu, All Rights Reserved
-#     http://oasis.halfmoon.jp/
+#	 http://oasis.halfmoon.jp/
 #
 # thumbnail-dir.pl
 # version 1.1 (2010/November/23)
@@ -13,6 +13,7 @@
 # version 1.3 (2011/January/09)
 # version 1.4 (2011/June/26)
 # version 1.5 (2012/January/14)
+# version 1.6 (2012/June/10)
 #
 # GNU GPL Free Software
 #
@@ -107,12 +108,15 @@ my @arrCsv = ();		# CSV書き出し時の全行バッファ
 
 
 # ファイル検索のパターン
-my @arrFileScanMask;
+my @arrFileScanMask = ('*.jpg', '*.jpeg', '*.png', '*.gif');
+# Linuxではファイル検索は大文字・小文字を区別するため、大文字化したものも候補に加える
 if($flag_os eq 'linux'){
-	@arrFileScanMask = ('*.jpg', '*.jpeg', '*.png', '*.gif', '*.JPG', '*.JPEG');}
-if($flag_os eq 'windows'){
-	# Windowsの場合は、ファイル名の大文字と小文字は同一に扱われているようだ
-	@arrFileScanMask = ('*.jpg', '*.jpeg', '*.png', '*.gif');
+    # 動画ファイルも対象とする
+	my @arrTemp = ('*.avi', '*.mov', '*.mp4', '*.3gp', '*.m4v', '*.mpg', '*.mpeg', '*.mts');
+	push(@arrFileScanMask, @arrTemp);
+    @arrTemp = ();
+	foreach(@arrFileScanMask){ push(@arrTemp, uc($_)); }	# 大文字化
+	push(@arrFileScanMask, @arrTemp);
 }
 
 # HTML出力時のファイル名で省略する拡張子
@@ -798,6 +802,7 @@ sub sub_scan_imagefiles {
 		# サムネイルファイルへの相対パスを作成
 		my $strThumbName = $dirname . '/' . $str_dir_thumbnail . $basename.$ext;
 		if($dirname eq ''){ $strThumbName = $str_dir_thumbnail . $basename.$ext; }
+		if(lc($ext) ne '.jpg' && lc($ext) ne '.jpeg'){ $strThumbName .= '.jpg'; }	# 拡張子がjpg以外の時
 
 		if($nMatchLine >= 0 && $flag_read_html == 1){
 			# 全てのデータを移行する場合
@@ -830,7 +835,7 @@ sub sub_scan_imagefiles {
 
 }
 
-
+# Exif日時と回転情報を得る（jpeg以外はファイルの更新日）
 sub sub_read_exifdata {
 	my $strFilename = shift;	# 対象ファイル（引数）
 	my $exifDate = 0;		# Exif日時（UNIX秒）
@@ -843,12 +848,12 @@ sub sub_read_exifdata {
 		return (0, 0);	# ファイルが存在しないとき
 	}
 
-	# Exif読み込み
-	if($flag_ignore_exif == 1){
-		# Exif情報を読み込まないモードの時い
+	if($flag_ignore_exif == 1 || lc($strFilename) !~ m/.jpg$|.jpeg$/){
+		# Exif情報を読み込まないモードの時、またはjpeg以外（png,gifや動画）
 		$exifDate = (stat($strFilename))[9];	# ファイルの最終更新日
 	}
 	else{
+		# Exif読み込み
 		$exifTool->ImageInfo($strFilename);
 
 		# Exif日時を読み込む
@@ -988,35 +993,48 @@ sub sub_make_thumbnail {
 				next;
 			}
 
-			@$image = ();		# 読み込まれている画像をクリア
+			if(lc($strFilenameInput) =~ m/.jpg$|.jpeg$|.gif$|.png$/){
+				# 画像ファイルの場合は、Image::Magickを利用してサムネイルを作成する
 
-			$image_check = $image->Read($strFilenameInput);
-			if($image_check)
-			{
-				print("\n画像ファイル :" . $strFilenameInput. " の読み込み不能\n");
-				$nCountError++;
-				next;
+				@$image = ();		# 読み込まれている画像をクリア
+
+				$image_check = $image->Read($strFilenameInput);
+				if($image_check)
+				{
+					print("\n画像ファイル :" . $strFilenameInput. " の読み込み不能\n");
+					$nCountError++;
+					next;
+				}
+
+				my ($nWidth, $nHeight) = $image->Get('width', 'height');
+				if($nWidth <= 0 || $nHeight <= 0){ die("ジオメトリ読み込み失敗"); }
+				my $nNewWidth = $nWidth > $nHeight ? $nLongEdge : int($nLongEdge*$nWidth/$nHeight);
+				my $nNewHeight = $nHeight > $nWidth ? $nLongEdge : int($nLongEdge*$nHeight/$nWidth);
+
+	#			$image->AdaptiveResize(width=>$nNewWidth, height=>$nNewHeight);
+				$image->Thumbnail(width=>$nNewWidth, height=>$nNewHeight);
+				$image->Sharpen(radius=>0.0, sigma=>1.0);
+				# exif情報による回転
+				if($exifRotate == 3){$image->Rotate(degrees=>180.0); }
+				if($exifRotate == 6){$image->Rotate(degrees=>90.0); }
+				if($exifRotate == 8){$image->Rotate(degrees=>270.0); }
+				$image->Set(quality=>90);
+				$image_check = $image->Write(sub_conv_to_local_charset($strFilenameOutput));
+				if($image_check)
+				{
+					print("\nサムネイル :" . $strFilenameOutput. " の書き込み不能\n");
+					$nCountError++;
+					next;
+				}
 			}
-
-			my ($nWidth, $nHeight) = $image->Get('width', 'height');
-			if($nWidth <= 0 || $nHeight <= 0){ die("ジオメトリ読み込み失敗"); }
-			my $nNewWidth = $nWidth > $nHeight ? $nLongEdge : int($nLongEdge*$nWidth/$nHeight);
-			my $nNewHeight = $nHeight > $nWidth ? $nLongEdge : int($nLongEdge*$nHeight/$nWidth);
-
-#			$image->AdaptiveResize(width=>$nNewWidth, height=>$nNewHeight);
-			$image->Thumbnail(width=>$nNewWidth, height=>$nNewHeight);
-			$image->Sharpen(radius=>0.0, sigma=>1.0);
-			# exif情報による回転
-			if($exifRotate == 3){$image->Rotate(degrees=>180.0); }
-			if($exifRotate == 6){$image->Rotate(degrees=>90.0); }
-			if($exifRotate == 8){$image->Rotate(degrees=>270.0); }
-			$image->Set(quality=>90);
-			$image_check = $image->Write(sub_conv_to_local_charset($strFilenameOutput));
-			if($image_check)
-			{
-				print("\nサムネイル :" . $strFilenameOutput. " の書き込み不能\n");
-				$nCountError++;
-				next;
+			else{
+				# 動画ファイルの場合は、ffmpegを利用してサムネイルを作成する
+				if(!sub_make_movie_thumbnail($strFilenameInput, $strFilenameOutput))
+				{
+					print("\n動画サムネイル :" . $strFilenameOutput. " の作成不能\n");
+					$nCountError++;
+					next;
+				}
 			}
 			if($nCountWrite % 10 == 0){ print("作成中 ... ".$nCountWrite."\n"); }
 			$nCountWrite++;
@@ -1038,6 +1056,62 @@ sub sub_make_thumbnail {
 
 }
 
+sub sub_make_movie_thumbnail{
+	my $input_filename = shift;		# 入力ファイル名（動画）
+	my $output_filename = shift;	# 出力ファイル名（jpeg）
+
+	my $sec = sub_get_movie_duration($input_filename);
+	if($sec <= 0){ return(0); }
+	$sec = int($sec * 0.5);	# 動画長さの中央の秒を求める
+
+	my ($width_org, $height_org) = sub_get_movie_framesize($input_filename);
+	
+	if($width_org <= 0 || $height_org <=0){ return(0); }
+
+	my ($width, $height) = ($nLongEdge, int($nLongEdge*$height_org/$width_org));
+    # 出力サイズは偶数（ffmpeg制限）
+	if($width % 2){ $width++; }
+	if($height % 2){ $height++; }
+
+	my $cmd = "ffmpeg -i $input_filename -f image2 -an -y -vframes 1 -ss $sec -s ".$width."x".$height." $output_filename";
+	my @out = `$cmd 2>&1`;
+
+	unless(-f $output_filename){ return(0); }
+	return(1);
+}
+
+
+sub sub_get_movie_framesize {
+	my ($filename) = @_;
+	my @out = `ffmpeg -i $filename 2>&1`;
+	my ($width, $height) = (0,0);
+	foreach my $line(@out){
+		$line =~ /Stream .+ Video: .+ (\d+)x(\d+)/s;
+		if($1){
+			$width = $1;
+			$height = $2;
+			last;
+		}
+	}
+	return ($width, $height);
+}
+
+sub sub_get_movie_duration {
+	my ($filename) = @_;
+	my @out = `ffmpeg -i $filename 2>&1`;
+	my ($hour, $min, $sec) = (0,0,0);
+	foreach my $line(@out){
+		$line =~ /Duration:\s+(\d+):(\d+):(\d+)(?:\.\d+)?\s*,/s;
+		if($1){
+			$hour = $1;
+			$min = $2;
+			$sec = $3;
+			last;
+		}
+	}
+	return ($hour*3600 + $min*60 + $sec);
+}
+
 
 # HTMLファイルの出力
 sub sub_create_html {
@@ -1056,29 +1130,29 @@ sub sub_create_html {
 			"  <title></title>\n" .
 			"  <style type=\"text/css\">\n<!--\n" .
 			"  body {\n" .
-			"      background-color:".$str_html_style_bgcol."; color:".$str_html_style_fontcol."; font-size: 10pt;\n" .
+			"	  background-color:".$str_html_style_bgcol."; color:".$str_html_style_fontcol."; font-size: 10pt;\n" .
 			"  }\n" .
 			"  table {\n" .
-			"      border:1px solid #aaa; border-collapse:collapse; font-size: 10pt; margin: 10px;\n" .
+			"	  border:1px solid #aaa; border-collapse:collapse; font-size: 10pt; margin: 10px;\n" .
 			"  }\n" .
 			"  th {\n" .
-			"      font-weight: normal; background:".$str_html_style_thbgcolor."; border:1px solid #aaa; padding: 0.2em 0.4em;\n" .
+			"	  font-weight: normal; background:".$str_html_style_thbgcolor."; border:1px solid #aaa; padding: 0.2em 0.4em;\n" .
 			"  }\n" .
 			"  td {\n" .
-			"      border:1px solid #aaa; padding: 0.2em 0.4em;\n" .
+			"	  border:1px solid #aaa; padding: 0.2em 0.4em;\n" .
 			"  }\n" .
 			"  a img {\n" .
-			"      border: 0; margin: 0; padding: 0;\n" .
+			"	  border: 0; margin: 0; padding: 0;\n" .
 			"  }\n" .
 			"  h3 {\n".
 			"	font-size: 12pt; font-weight: lighter; text-indent: 5px; letter-spacing: 3px; border-width: 0px 0px 1px 5px;\n" .
 			"	border-style: solid; border-bottom-color: #b87330; border-left-color: #b87330; padding: 2px 5px; margin: 8px 0px 3px; clear: both;\n".
 			"  }\n".
 			"  div.gallerybox {\n".
-			"      display: block; position: relative; float: left; margin: 5px; min-width: 50px; min-height: 50px; font-size: 10pt;\n".
+			"	  display: block; position: relative; float: left; margin: 5px; min-width: 50px; min-height: 50px; font-size: 10pt;\n".
 			"  }\n".
 			"  div.g-comment2 {\n".
-			"      line-height: 1.0em;\n".
+			"	  line-height: 1.0em;\n".
 			"  }\n".
 			"-->\n  </style>\n" .
 			"</head>\n" .
