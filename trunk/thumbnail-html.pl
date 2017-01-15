@@ -8,6 +8,7 @@
 #	 http://oasis.halfmoon.jp/
 #
 # thumbnail-dir.pl
+my $verstr = "1.6.2";
 # version 1.1 (2010/November/23)
 # version 1.2 (2010/December/16)
 # version 1.3 (2011/January/09)
@@ -15,6 +16,7 @@
 # version 1.5 (2012/January/14)
 # version 1.6 (2012/June/10)
 # version 1.6.1 (2014/April/26)
+# version 1.6.2 (2017/January/15)
 #
 # GNU GPL Free Software
 #
@@ -123,7 +125,7 @@ if($flag_os eq 'linux'){
 # HTML出力時のファイル名で省略する拡張子
 my @arrKnownSuffix = ('.jpg', '.jpeg', '.png', '.gif', '.JPG', '.JPEG');
 
-print("\n".basename($0)." - サムネイルHTML作成 Perlスクリプト\n\n");
+print("\n".basename($0)." - サムネイルHTML作成 Perlスクリプト  version ".$verstr."\n\n");
 
 sub_user_select_mode();	# モードの選択
 
@@ -1378,6 +1380,8 @@ sub sub_parse_html {
 					$strTemp =~ s/&__gt;/&gt;/g;
 					$strTemp =~ s/&__lt;/&lt;/g;
 					$strTemp =~ s/&__quot;/&quot;/g;
+					# <br /> → <br> (過去のpQuery仕様で<br/>が<br>となるバグに合わせる) 2017/01/15
+					$strTemp =~ s/<[ ]*br[ ]*\/>/<br>/g;
 					# 文字列の調整
 					$strTemp =~ s/　/ /g;	# 全角空白→半角空白
 					$strTemp = sub_br_revise($strTemp);		# <br>の重複、行末、行頭の場合削除
